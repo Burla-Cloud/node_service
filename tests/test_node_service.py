@@ -156,7 +156,7 @@ def _execute_job(node_svc_hostname, my_function, my_inputs, my_packages, my_imag
     JOB_ID = str(uuid4()) + "-test"
     SUBJOB_IDS = list(range(len(my_inputs)))
 
-    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-subjob-images/default-image:latest"
+    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-job-environments/default-image:latest"
     image = my_image if my_image else DEFAULT_IMAGE
 
     _upload_function_to_gcs(JOB_ID, my_function)
@@ -276,7 +276,7 @@ def test_input_queue(hostname):
 
     JOB_ID = str(uuid4()) + "-test"
     SUBJOB_IDS = list(range(len(my_inputs)))
-    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-subjob-images/default-image:latest"
+    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-job-environments/default-image:latest"
     image = my_image if my_image else DEFAULT_IMAGE
 
     return_values = _execute_job(hostname, my_function, my_inputs, my_packages, my_image)
@@ -300,7 +300,7 @@ def test_BUSY_error(hostname):
 
     JOB_ID = str(uuid4()) + "-test"
     SUBJOB_IDS = list(range(len(my_inputs)))
-    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-subjob-images/default-image:latest"
+    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-job-environments/default-image:latest"
     image = my_image if my_image else DEFAULT_IMAGE
     _upload_function_to_gcs(JOB_ID, my_function)
     _upload_inputs_to_gcs(JOB_ID, my_inputs)

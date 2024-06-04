@@ -45,7 +45,7 @@ class Logger:
         self, request: Optional[Request] = None, gcl_client: Optional[logging.Client] = None
     ):
         self.loggable_request = self._loggable_request(request) if request else None
-        self.gcl_client = gcl_client if gcl_client else logging.Client()
+        self.gcl_client = gcl_client if gcl_client else logging.Client().logger("node_service")
 
     def _loggable_request(self, request):
         return json.dumps(vars(request), skipkeys=True, default=lambda o: "<not serializable>")

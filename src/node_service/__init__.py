@@ -2,7 +2,7 @@ import os
 from threading import Thread
 
 import docker
-from fastapi import FastAPI, Depends, Request, BackgroundTasks
+from fastapi import FastAPI, Depends, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from google.cloud import logging
@@ -113,6 +113,7 @@ def _reboot_containers():
 
 
 try:
+    Logger().log("Hi this is a test.")
     _reboot_containers()
 except Exception as e:
     Logger().log_exception(e)
