@@ -10,6 +10,29 @@ import pytest
 PORT = 5000
 HOSTNAME = f"http://127.0.0.1:{PORT}"
 
+CONTAINERS = [
+    {
+        "image": "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest",
+        "python_executable": "/.pyenv/versions/3.9.*/bin/python3.9",
+        "python_version": "3.9",
+    },
+    {
+        "image": "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest",
+        "python_executable": "/.pyenv/versions/3.10.*/bin/python3.10",
+        "python_version": "3.10",
+    },
+    {
+        "image": "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest",
+        "python_executable": "/.pyenv/versions/3.11.*/bin/python3.11",
+        "python_version": "3.11",
+    },
+    {
+        "image": "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest",
+        "python_executable": "/.pyenv/versions/3.12.*/bin/python3.12",
+        "python_version": "3.12",
+    },
+]
+
 
 def delete_containers():
     client = docker.from_env()
@@ -29,7 +52,6 @@ def hostname():
     print("\n")
     delete_containers()
 
-    print("STARTING NODE SERVICE (starting all standby containers)")
     from node_service import app  # <- standby containers are started when this is loaded.
 
     server_thread = threading.Thread(target=start_server, args=(app,), daemon=True)
@@ -39,15 +61,22 @@ def hostname():
     # Wait until node service has started all subjob_executors
     attempt = 0
     while True:
-        sleep(2)
         try:
             response = requests.get(f"{HOSTNAME}/")
             response.raise_for_status()
-            assert response.json()["status"] != "FAILED"
-            break
+            status = response.json()["status"]
         except requests.exceptions.ConnectionError:
-            pass
+            status = None
 
+        if status == "FAILED":
+            raise Exception("Node service entered state: FAILED")
+        if status == "PLEASE_REBOOT":
+            response = requests.post(f"{HOSTNAME}/reboot", json=CONTAINERS)
+            response.raise_for_status()
+        if status == "READY":
+            break
+
+        sleep(2)
         attempt += 1
         if attempt > 10:
             raise Exception("TIMEOUT! Node Service not ready after 20 seconds?")
