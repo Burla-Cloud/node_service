@@ -52,10 +52,10 @@ app.include_router(endpoints_router)
 def get_status():
     if SELF["FAILED"]:
         return {"status": "FAILED"}
-    elif SELF["PLEASE_REBOOT"]:
-        return {"status": "PLEASE_REBOOT"}
     elif SELF["REBOOTING"]:
         return {"status": "REBOOTING"}
+    elif SELF["PLEASE_REBOOT"]:
+        return {"status": "PLEASE_REBOOT"}
     elif SELF["RUNNING"]:
         return {"status": "RUNNING"}
     else:
