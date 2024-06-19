@@ -3,6 +3,7 @@ from typing import List
 from threading import Thread
 
 import docker
+from docker.errors import APIError, NotFound
 from fastapi import APIRouter, Path, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from google.cloud import firestore
@@ -102,9 +103,9 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
         for container in docker_client.containers.list(all=True):
             try:
                 container.remove(force=True)
-            except (docker.errors.APIError, requests.exceptions.HTTPError) as e:
+            except (APIError, NotFound, requests.exceptions.HTTPError) as e:
                 # re-raise any errors that aren't an "already-in-progress" error
-                if not "409" in str(e):
+                if not (("409" in str(e)) or ("404" in str(e))):
                     raise e
 
         def create_subjob_executor(*a, **kw):
