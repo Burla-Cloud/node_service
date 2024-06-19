@@ -46,6 +46,7 @@ from node_service.helpers import Logger
 
 app = FastAPI(docs_url=None, redoc_url=None)
 app.include_router(endpoints_router)
+print("\n\n\nHERE\n\n\n")
 
 
 @app.get("/")
