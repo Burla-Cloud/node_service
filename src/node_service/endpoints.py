@@ -1,3 +1,4 @@
+import requests
 from typing import List
 from threading import Thread
 
@@ -98,7 +99,13 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
         docker_client = docker.from_env(timeout=240)
 
         # remove all current containers
-        [container.remove(force=True) for container in docker_client.containers.list(all=True)]
+        for container in docker_client.containers.list(all=True):
+            try:
+                container.remove(force=True)
+            except (docker.errors.APIError, requests.exceptions.HTTPError) as e:
+                # re-raise any errors that aren't an "already-in-progress" error
+                if not "409" in str(e):
+                    raise e
 
         def create_subjob_executor(*a, **kw):
             # Log error inside thread because sometimes it isn't sent to the main thread, idk why.

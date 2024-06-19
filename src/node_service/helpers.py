@@ -95,6 +95,6 @@ def add_logged_background_task(
             exc_type, exc_value, exc_traceback = sys.exc_info()
             details = traceback.format_exception(exc_type, exc_value, exc_traceback)
             traceback_str = "".join(details).split("another exception occurred:")[-1]
-            logger.log(message=str(e), severity="ERROR", traceback=traceback_str)
+            logger.log(str(e), severity="ERROR", traceback=traceback_str)
 
     background_tasks.add_task(func_logged, *a, **kw)
