@@ -68,7 +68,7 @@ def execute(
     subjob_executors_to_keep = []
     current_parallelism = 0
     for subjob_executor in SELF["subjob_executors"]:
-        correct_python_version = subjob_executor.python_version == job["python_version"]
+        correct_python_version = subjob_executor.python_version == job["env"]["python_version"]
         need_more_parallelism = current_parallelism < request_json["parallelism"]
 
         if correct_python_version and need_more_parallelism:
@@ -92,7 +92,6 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
 
     # if SELF["RUNNING"]:
     #     raise HTTPException(409, detail=f"Node in state `RUNNING`, unable to satisfy request")
-    print("REBOOTING HERE")
     try:
         SELF["REBOOTING"] = True
         SELF["subjob_executors"] = []
@@ -136,7 +135,6 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
         if some_containers_missing:
             SELF["FAILED"] = True
         else:
-            print("UNSETTING STUFF !")
             SELF["PLEASE_REBOOT"] = False
             SELF["REBOOTING"] = False
             SELF["job_id"] = None
@@ -146,5 +144,4 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
         raise e
 
     SELF["most_recent_container_config"] = containers
-    print("DONE REBOOTING")
     return "Success"

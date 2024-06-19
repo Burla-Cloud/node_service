@@ -46,25 +46,19 @@ from node_service.helpers import Logger
 
 app = FastAPI(docs_url=None, redoc_url=None)
 app.include_router(endpoints_router)
-print("\n\n\nHERE\n\n\n")
 
 
 @app.get("/")
 def get_status():
     if SELF["FAILED"]:
-        print(f"RETURNED STATUS:\t FAILED")
         return {"status": "FAILED"}
     elif SELF["REBOOTING"]:
-        print(f"RETURNED STATUS:\t REBOOTING")
         return {"status": "REBOOTING"}
     elif SELF["PLEASE_REBOOT"]:
-        print(f"RETURNED STATUS:\t PLEASE_REBOOT")
         return {"status": "PLEASE_REBOOT"}
     elif SELF["RUNNING"]:
-        print(f"RETURNED STATUS:\t RUNNING")
         return {"status": "RUNNING"}
     else:
-        print(f"RETURNED STATUS:\t READY")
         return {"status": "READY"}
 
 
