@@ -92,7 +92,7 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
 
     # if SELF["RUNNING"]:
     #     raise HTTPException(409, detail=f"Node in state `RUNNING`, unable to satisfy request")
-
+    print("REBOOTING HERE")
     try:
         SELF["REBOOTING"] = True
         SELF["subjob_executors"] = []
@@ -136,6 +136,7 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
         if some_containers_missing:
             SELF["FAILED"] = True
         else:
+            print("UNSETTING STUFF !")
             SELF["PLEASE_REBOOT"] = False
             SELF["REBOOTING"] = False
             SELF["job_id"] = None
@@ -145,4 +146,5 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
         raise e
 
     SELF["most_recent_container_config"] = containers
+    print("DONE REBOOTING")
     return "Success"
