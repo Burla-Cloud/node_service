@@ -145,11 +145,6 @@ class SubJobExecutor:
             response.raise_for_status()
             status = response.json()["status"]  # will be one of: READY, RUNNING, FAILED, DONE
         except requests.exceptions.ConnectionError:
-            #
-            logger = logging.Client().logger("node_service")
-            error = f"ConnectionError: Unable to connect to container_service at host: {self.host}"
-            logger.log_struct({"severity": "DEBUG", "error": error})
-            #
             if attempt <= 30:
                 sleep(3)
                 return self.status(attempt + 1)

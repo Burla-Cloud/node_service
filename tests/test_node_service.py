@@ -13,6 +13,7 @@ from google.cloud import firestore
 from google.cloud.storage import Client, Blob
 
 from env_builder import start_building_environment
+from conftest import CONTAINERS
 
 """
 If node_service is imported anywhere here the containers will be started 
@@ -156,7 +157,7 @@ def _execute_job(node_svc_hostname, my_function, my_inputs, my_packages, my_imag
     JOB_ID = str(uuid4()) + "-test"
     SUBJOB_IDS = list(range(len(my_inputs)))
 
-    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-subjob-images/default-image:latest"
+    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest"
     image = my_image if my_image else DEFAULT_IMAGE
 
     _upload_function_to_gcs(JOB_ID, my_function)
@@ -180,12 +181,12 @@ def _execute_job(node_svc_hostname, my_function, my_inputs, my_packages, my_imag
         response.raise_for_status()
         response_json = response.json()
 
-        if response_json["any_failed"] == True:
+        if response_json["any_subjobs_failed"] == True:
             # exception in container_service,
             # if this happens tell user their job failed and it was not their fault.
             raise Exception("EXECUTOR FAILED")
 
-        if response_json["all_done"] == True:
+        if response_json["all_subjobs_done"] == True:
             break
 
         attempts += 1
@@ -276,7 +277,7 @@ def test_input_queue(hostname):
 
     JOB_ID = str(uuid4()) + "-test"
     SUBJOB_IDS = list(range(len(my_inputs)))
-    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-subjob-images/default-image:latest"
+    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-job-environments/default-image:latest"
     image = my_image if my_image else DEFAULT_IMAGE
 
     return_values = _execute_job(hostname, my_function, my_inputs, my_packages, my_image)
@@ -299,8 +300,9 @@ def test_BUSY_error(hostname):
         return my_input * 2
 
     JOB_ID = str(uuid4()) + "-test"
+    JOB_2_ID = str(uuid4()) + "-test"
     SUBJOB_IDS = list(range(len(my_inputs)))
-    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-subjob-images/default-image:latest"
+    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-job-environments/default-image:latest"
     image = my_image if my_image else DEFAULT_IMAGE
     _upload_function_to_gcs(JOB_ID, my_function)
     _upload_inputs_to_gcs(JOB_ID, my_inputs)
@@ -313,9 +315,9 @@ def test_BUSY_error(hostname):
     response = requests.post(f"{hostname}/jobs/{JOB_ID}", json=payload)
     response.raise_for_status()
 
-    response = requests.post(f"{hostname}/jobs/{JOB_ID}", json=payload)
+    response = requests.post(f"{hostname}/jobs/{JOB_2_ID}", json=payload)
     assert response.status_code == 409
 
     # restart node service before job is done
-    response = requests.post(f"{hostname}/standby", json={})
+    response = requests.post(f"{hostname}/reboot", json=CONTAINERS)
     response.raise_for_status()

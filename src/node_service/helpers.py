@@ -3,12 +3,12 @@ import sys
 import socket
 import traceback
 import json
-from typing import Optional
+from typing import Optional, Callable
 
 from collections import deque
 
 from google.cloud import logging
-from fastapi import Request
+from fastapi import Request, BackgroundTasks
 from node_service import __version__
 from node_service.endpoints import SELF
 
@@ -45,7 +45,7 @@ class Logger:
         self, request: Optional[Request] = None, gcl_client: Optional[logging.Client] = None
     ):
         self.loggable_request = self._loggable_request(request) if request else None
-        self.gcl_client = gcl_client if gcl_client else logging.Client()
+        self.gcl_client = gcl_client if gcl_client else logging.Client().logger("node_service")
 
     def _loggable_request(self, request):
         return json.dumps(vars(request), skipkeys=True, default=lambda o: "<not serializable>")
@@ -75,3 +75,26 @@ class Logger:
             "request": self.loggable_request,
         }
         self.gcl_client.log_struct(struct)
+
+
+def add_logged_background_task(
+    background_tasks: BackgroundTasks, logger: Logger, func: Callable, *a, **kw
+):
+    """
+    Errors thrown in background tasks are completely hidden and ignored by default.
+    - BackgroundTasks class cannot be reliably monkeypatched
+    - BackgroundTasks cannot be reliably modified in middleware
+    - BackgroundTasks cannot be returned by dependencies (`fastapi.Depends`)
+    Hopefully I remember to use this function everytime I would normally call `.add_task` 😀🔫
+    """
+
+    def func_logged(*a, **kw):
+        try:
+            return func(*a, **kw)
+        except Exception as e:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+            traceback_str = "".join(details).split("another exception occurred:")[-1]
+            logger.log(str(e), severity="ERROR", traceback=traceback_str)
+
+    background_tasks.add_task(func_logged, *a, **kw)
