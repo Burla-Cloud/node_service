@@ -47,11 +47,11 @@ def _create_job_document_in_database(job_id, subjob_ids, image, dependencies):
         {
             "test": True,
             "function_uri": f"gs://burla-jobs/12345/{job_id}/function.pkl",
-            "python_version": f"3.{sys.version_info.minor}",
             "env": {
                 "is_copied_from_client": bool(dependencies),
                 "image": image,
                 "packages": dependencies,
+                "python_version": f"3.{sys.version_info.minor}",
             },
         }
     )

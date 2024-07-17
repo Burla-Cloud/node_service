@@ -4,6 +4,7 @@ import requests
 import traceback
 from uuid import uuid4
 from time import sleep
+from typing import Optional
 
 from google.cloud import logging
 import docker
@@ -121,9 +122,10 @@ class SubJobExecutor:
         if self.exists():
             self.container.remove(force=True)  # The "force" arg kills it if it's not stopped
 
-    def execute(self, job_id: str):
+    def execute(self, job_id: str, function_pkl: Optional[bytes] = None):
         if self.exists():
-            response = requests.post(f"{self.host}/jobs/{job_id}", json={})
+            payload = {"function_pkl": function_pkl}
+            response = requests.post(f"{self.host}/jobs/{job_id}", json=payload)
             response.raise_for_status()
         else:
             raise Exception("This executor no longer exists.")
