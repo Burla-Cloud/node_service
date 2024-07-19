@@ -123,12 +123,16 @@ class SubJobExecutor:
             self.container.remove(force=True)  # The "force" arg kills it if it's not stopped
 
     def execute(self, job_id: str, function_pkl: Optional[bytes] = None):
-        if self.exists():
-            payload = {"function_pkl": function_pkl}
-            response = requests.post(f"{self.host}/jobs/{job_id}", json=payload)
-            response.raise_for_status()
+        container_is_running = self.exists()
+        url = f"{self.host}/jobs/{job_id}"
+
+        if container_is_running and function_pkl:
+            response = requests.post(url, files=dict(function_pkl=function_pkl))
+        elif container_is_running:
+            response = requests.post(url)
         else:
             raise Exception("This executor no longer exists.")
+        response.raise_for_status()
 
     def log_debug_info(self):
         logs = self.logs() if self.exists() else "Unable to retrieve container logs."

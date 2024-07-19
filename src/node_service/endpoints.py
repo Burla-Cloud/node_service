@@ -1,6 +1,7 @@
 import requests
 from typing import List
 from threading import Thread
+from typing import Optional
 
 import docker
 from docker.errors import APIError, NotFound
@@ -8,7 +9,7 @@ from fastapi import APIRouter, Path, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from google.cloud import firestore
 
-from node_service import PROJECT_ID, SELF, N_CPUS, get_request_json, get_logger
+from node_service import PROJECT_ID, SELF, N_CPUS, get_request_json, get_logger, get_request_files
 from node_service.helpers import Logger, add_logged_background_task
 from node_service.subjob_executor import SubJobExecutor
 
@@ -57,6 +58,7 @@ def execute(
     job_id: str = Path(...),
     request_json: dict = Depends(get_request_json),
     logger: Logger = Depends(get_logger),
+    request_files: Optional[dict] = Depends(get_request_files),
 ):
     if SELF["RUNNING"]:
         raise HTTPException(409, detail=f"Node in state `RUNNING`, unable to satisfy request")
@@ -74,7 +76,7 @@ def execute(
         need_more_parallelism = current_parallelism < request_json["parallelism"]
 
         if correct_python_version and need_more_parallelism:
-            subjob_executor.execute(job_id=job_id, function_pkl=request_json.get("function_pkl"))
+            subjob_executor.execute(job_id=job_id, function_pkl=request_files["function_pkl"])
             subjob_executors_to_keep.append(subjob_executor)
             current_parallelism += 1
             logger.log(f"Assigned job to executor, current_parallelism={current_parallelism}")

@@ -1,8 +1,10 @@
 import os
+import json
 
 from fastapi import FastAPI, Depends, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.datastructures import UploadFile
 from google.cloud import logging
 
 
@@ -26,7 +28,25 @@ SELF = {
 
 
 async def get_request_json(request: Request):
-    return await request.json()
+    try:
+        return await request.json()
+    except:
+        form_data = await request.form()
+        return json.loads(form_data["request_json"])
+
+
+async def get_request_files(request: Request):
+    """
+    If request is multipart/form data load all files and returns as dict of {filename: bytes}
+    """
+    form_data = await request.form()
+    files = {}
+    for key, value in form_data.items():
+        if isinstance(value, UploadFile):
+            files.update({key: await value.read()})
+
+    if files:
+        return files
 
 
 def get_gcl_client():
