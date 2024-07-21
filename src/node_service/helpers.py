@@ -1,15 +1,14 @@
-import os
 import sys
 import socket
 import traceback
-import json
-from typing import Optional, Callable
+from itertools import groupby
+from typing import Callable
+from datetime import datetime, timedelta, timezone
 
 from collections import deque
 
-from google.cloud import logging
 from fastapi import Request, BackgroundTasks
-from node_service import __version__
+from node_service import __version__, IN_DEV, GCL_CLIENT
 from node_service.endpoints import SELF
 
 
@@ -40,41 +39,59 @@ def next_free_port():
             return next_free_port()
 
 
+def format_traceback(traceback_details: list):
+    details = ["  ... (detail hidden)\n" if "/pypoetry/" in d else d for d in traceback_details]
+    details = [key for key, _ in groupby(details)]  # <- remove consecutive duplicates
+    return "".join(details).split("another exception occurred:")[-1]
+
+
 class Logger:
-    def __init__(
-        self, request: Optional[Request] = None, gcl_client: Optional[logging.Client] = None
-    ):
-        self.loggable_request = self._loggable_request(request) if request else None
-        self.gcl_client = gcl_client if gcl_client else logging.Client().logger("node_service")
 
-    def _loggable_request(self, request):
-        return json.dumps(vars(request), skipkeys=True, default=lambda o: "<not serializable>")
+    def __init__(self, request: Request):
+        self.loggable_request = self.__loggable_request(request)
 
-    def log(self, msg: str, **kw):
-        struct = {
-            "message": msg,
-            "request": self.loggable_request,
-            "version": __version__,
-            **kw,
+    def __make_serializeable(self, obj):
+        """
+        Recursively traverses a nested dict swapping any:
+        - tuple -> list
+        - !dict or !list or !str -> str
+        """
+        if isinstance(obj, tuple) or isinstance(obj, list):
+            return [self.__make_serializeable(item) for item in obj]
+        elif isinstance(obj, dict):
+            return {key: self.__make_serializeable(value) for key, value in obj.items()}
+        elif not (isinstance(obj, dict) or isinstance(obj, list) or isinstance(obj, str)):
+            return str(obj)
+        else:
+            return obj
+
+    def __loggable_request(self, request: Request):
+        keys = ["asgi", "client", "headers", "http_version", "method", "path", "path_params"]
+        keys.extend(["query_string", "raw_path", "root_path", "scheme", "server", "state", "type"])
+        scope = {key: request.scope.get(key) for key in keys}
+        request_dict = {
+            "scope": scope,
+            "url": str(request.url),
+            "base_url": str(request.base_url),
+            "headers": request.headers,
+            "query_params": request.query_params,
+            "path_params": request.path_params,
+            "cookies": request.cookies,
+            "client": request.client,
+            "method": request.method,
         }
-        self.gcl_client.log_struct(struct)
+        # google cloud logging won't log tuples or bytes objects.
+        return self.__make_serializeable(request_dict)
 
-    def log_exception(self, e: Exception):
-        exc_type, exc_value, exc_traceback = sys.exc_info()
-        traceback_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-        traceback_str = "".join(traceback_details)
-
-        if os.environ.get("IN_DEV"):
-            print(traceback_str, sys.stderr)
-
-        struct = {
-            "severity": "ERROR",
-            "message": str(e),
-            "traceback": traceback_str,
-            "version": __version__,
-            "request": self.loggable_request,
-        }
-        self.gcl_client.log_struct(struct)
+    def log(self, message: str, severity="INFO", **kw):
+        if IN_DEV and "traceback" in kw.keys():
+            print(f"\nERROR: {message.strip()}\n{kw['traceback'].strip()}\n", file=sys.stderr)
+        elif IN_DEV:
+            eastern_time = datetime.now(timezone.utc) + timedelta(hours=-4)
+            print(f"{eastern_time.strftime('%I:%M:%S.%f %p')}: {message}")
+        else:
+            struct = dict(message=message, request=self.loggable_request, **kw)
+            GCL_CLIENT.log_struct(struct, severity=severity)
 
 
 def add_logged_background_task(
@@ -87,14 +104,17 @@ def add_logged_background_task(
     - BackgroundTasks cannot be returned by dependencies (`fastapi.Depends`)
     Hopefully I remember to use this function everytime I would normally call `.add_task` 😀🔫
     """
+    tb_details = traceback.format_list(traceback.extract_stack()[:-1])
+    parent_traceback = "Traceback (most recent call last):\n" + format_traceback(tb_details)
 
     def func_logged(*a, **kw):
         try:
             return func(*a, **kw)
         except Exception as e:
             exc_type, exc_value, exc_traceback = sys.exc_info()
-            details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            traceback_str = "".join(details).split("another exception occurred:")[-1]
-            logger.log(str(e), severity="ERROR", traceback=traceback_str)
+            tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+            local_traceback_no_title = "\n".join(format_traceback(tb_details).split("\n")[1:])
+            traceback_str = parent_traceback + local_traceback_no_title
+            logger.log(message=str(e), severity="ERROR", traceback=traceback_str)
 
     background_tasks.add_task(func_logged, *a, **kw)

@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import requests
 import traceback
 from uuid import uuid4
@@ -9,7 +10,7 @@ from typing import Optional
 from google.cloud import logging
 import docker
 
-from node_service import IN_PRODUCTION, PROJECT_ID
+from node_service import IN_PRODUCTION, PROJECT_ID, IN_DEV
 from node_service.helpers import next_free_port
 
 LOGGER = logging.Client().logger("node_service")
@@ -42,10 +43,11 @@ class SubJobExecutor:
                     image=image,
                     command=["/bin/sh", "-c", f"{python_executable} -m {gunicorn_command}"],
                     ports={port: port},
-                    volumes=DEVELOPMENT_VOLUMES if os.environ.get("IN_DEV") else {},
+                    volumes=DEVELOPMENT_VOLUMES if IN_DEV else {},
                     environment={
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                         "IN_PRODUCTION": IN_PRODUCTION,
+                        "IN_DEV": IN_DEV,
                     },
                     detach=True,
                 )
@@ -135,15 +137,21 @@ class SubJobExecutor:
         response.raise_for_status()
 
     def log_debug_info(self):
-        logs = self.logs() if self.exists() else "Unable to retrieve container logs."
+        container_logs = self.logs() if self.exists() else "Unable to retrieve container logs."
+        container_logs = f"\nERROR INSIDE CONTAINER:\n{container_logs}\n"
+        containers_info = [vars(c) for c in self.docker_client.containers.list(all=True)]
+        containers_info = json.loads(json.dumps(containers_info, default=lambda thing: str(thing)))
         logger = logging.Client().logger("node_service")
-        logger.log_struct({"severity": "ERROR", "container_logs": logs})
-
-        debug_info = [vars(c) for c in self.docker_client.containers.list()]
-        logger.log_struct({"severity": "ERROR", "DEBUG INFO": debug_info})
+        logger.log_struct(
+            {
+                "severity": "ERROR",
+                "LOGS_FROM_FAILED_CONTAINER": container_logs,
+                "CONTAINERS INFO": containers_info,
+            }
+        )
 
         if os.environ.get("IN_DEV"):  # <- to make debugging easier
-            print(logs, file=sys.stderr)
+            print(container_logs, file=sys.stderr)
 
     def status(self, attempt: int = 0):
         try:

@@ -76,7 +76,8 @@ def execute(
         need_more_parallelism = current_parallelism < request_json["parallelism"]
 
         if correct_python_version and need_more_parallelism:
-            subjob_executor.execute(job_id=job_id, function_pkl=request_files["function_pkl"])
+            function_pkl = (request_files or {}).get("function_pkl")
+            subjob_executor.execute(job_id=job_id, function_pkl=function_pkl)
             subjob_executors_to_keep.append(subjob_executor)
             current_parallelism += 1
             logger.log(f"Assigned job to executor, current_parallelism={current_parallelism}")
