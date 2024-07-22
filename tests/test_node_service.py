@@ -1,9 +1,10 @@
 import sys
+import json
 import pickle
 import pytest
 import requests
 from uuid import uuid4
-from time import sleep, time
+from time import sleep
 from six import reraise
 
 import cloudpickle
@@ -153,22 +154,31 @@ def _assert_node_service_left_proper_containers_running():
         attempts += 1
 
 
-def _execute_job(node_svc_hostname, my_function, my_inputs, my_packages, my_image):
+def _execute_job(
+    node_svc_hostname, my_function, my_inputs, my_packages, my_image, send_inputs_through_gcs=False
+):
     JOB_ID = str(uuid4()) + "-test"
     SUBJOB_IDS = list(range(len(my_inputs)))
 
     DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest"
     image = my_image if my_image else DEFAULT_IMAGE
 
-    _upload_function_to_gcs(JOB_ID, my_function)
-    _upload_inputs_to_gcs(JOB_ID, my_inputs)
+    if send_inputs_through_gcs:
+        _upload_function_to_gcs(JOB_ID, my_function)
+        _upload_inputs_to_gcs(JOB_ID, my_inputs)
+
     _create_job_document_in_database(JOB_ID, SUBJOB_IDS, image, my_packages)
     if my_packages:
         start_building_environment(JOB_ID, image=my_image if my_image else DEFAULT_IMAGE)
 
     # request job execution
-    job_requested_at = time()
-    response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", json={"parallelism": 1})
+    if send_inputs_through_gcs:
+        response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", json={"parallelism": 1})
+    else:
+        function_pkl = cloudpickle.dumps(my_function)
+        files = dict(function_pkl=function_pkl)
+        data = dict(request_json=json.dumps({"parallelism": 1}))
+        response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", files=files, data=data)
     response.raise_for_status()
 
     # loop until job is done
@@ -194,7 +204,6 @@ def _execute_job(node_svc_hostname, my_function, my_inputs, my_packages, my_imag
             raise Exception("TIMEOUT: Job took > 3 minutes to finish?")
 
     _retrieve_and_raise_errors(JOB_ID, SUBJOB_IDS)
-    # _print_udf_response_times(job_requested_at, JOB_ID, SUBJOB_IDS)
     return_values = _download_return_values_from_gcs(JOB_ID, SUBJOB_IDS)
     return return_values
 
