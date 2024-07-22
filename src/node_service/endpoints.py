@@ -42,9 +42,6 @@ def get_job_status(
     any_failed = any([status == "FAILED" for status in executors_status])
     all_done = all([status == "DONE" for status in executors_status])
 
-    # TODO: remove, this is temporary debugging code.
-    logger.log(f"STATUS REQUEST FOR {job_id}, executors = {SELF["subjob_executors"]}, executors_status={executors_status}")
-
     if all_done or any_failed:
         previous_containers = SELF["most_recent_container_config"]
         SELF["RUNNING"] = False
