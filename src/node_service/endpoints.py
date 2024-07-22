@@ -45,9 +45,7 @@ def get_job_status(
     if all_done or any_failed:
         previous_containers = SELF["most_recent_container_config"]
         SELF["RUNNING"] = False
-        add_logged_background_task(
-            background_tasks, logger, reboot_containers, previous_containers, logger
-        )
+        add_logged_background_task(background_tasks, logger, reboot_containers, previous_containers)
 
     return {"all_subjobs_done": all_done, "any_subjobs_failed": any_failed}
 
@@ -92,7 +90,7 @@ def execute(
 
 # TODO: should take in num container sets to start.
 @router.post("/reboot")
-def reboot_containers(containers: List[Container], logger: Logger = Depends(get_logger)):
+def reboot_containers(containers: List[Container]):
     """Kill all containers then start provided containers."""
 
     # if SELF["RUNNING"]:
@@ -102,8 +100,13 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
         SELF["subjob_executors"] = []
         docker_client = docker.from_env(timeout=240)
 
+        # ignore `main_service` container so that in local testing I can use the `main_service`
+        # container while I am running the `node_service` tests.
+        current_containers = docker_client.containers.list(all=True)
+        current_containers = [c for c in current_containers if c.name != "main_service"]
+
         # remove all current containers
-        for container in docker_client.containers.list(all=True):
+        for container in current_containers:
             try:
                 container.remove(force=True)
             except (APIError, NotFound, requests.exceptions.HTTPError) as e:
@@ -137,14 +140,20 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
         for thread in threads:
             thread.join()
 
+        # ignore `main_service` container so that in local testing I can use the `main_service`
+        # container while I am running the `node_service` tests.
+        current_containers = docker_client.containers.list(all=True)
+        current_containers = [c for c in current_containers if c.name != "main_service"]
+
         # Sometimes on larger machines, some containers don't start, or get stuck in "CREATED" state
         # This has not been diagnosed, this check is performed to ensure all containers started.
-        containers_status = [c.status for c in docker_client.containers.list(all=True)]
+        containers_status = [c.status for c in current_containers]
         num_running_containers = sum([status == "running" for status in containers_status])
         some_containers_missing = num_running_containers != (N_CPUS * len(containers))
 
         if some_containers_missing:
             SELF["FAILED"] = True
+            raise Exception("Unable to reboot, not all containers started!")
         else:
             SELF["PLEASE_REBOOT"] = False
             SELF["REBOOTING"] = False

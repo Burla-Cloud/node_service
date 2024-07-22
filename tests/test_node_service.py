@@ -41,7 +41,7 @@ def _upload_inputs_to_gcs(job_id, _inputs):
         blob.upload_from_string(data=pickled_input, content_type="application/octet-stream")
 
 
-def _create_job_document_in_database(job_id, subjob_ids, image, dependencies):
+def _create_job_document_in_database(job_id, subjob_ids, image, dependencies, inputs):
     db = firestore.Client(project="burla-test")
     job_ref = db.collection("jobs").document(job_id)
     job_ref.set(
@@ -57,8 +57,13 @@ def _create_job_document_in_database(job_id, subjob_ids, image, dependencies):
         }
     )
     sub_jobs_collection = job_ref.collection("sub_jobs")
-    for subjob_id in subjob_ids:
-        sub_jobs_collection.document(str(subjob_id)).set({"claimed": False})
+    if inputs:
+        for subjob_id, input in zip(subjob_ids, inputs):
+            subjob = {"claimed": False, "input_pkl": cloudpickle.dumps(input)}
+            sub_jobs_collection.document(str(subjob_id)).set(subjob)
+    else:
+        for subjob_id in subjob_ids:
+            sub_jobs_collection.document(str(subjob_id)).set({"claimed": False})
 
 
 def _retrieve_and_raise_errors(job_id, subjob_ids):
@@ -132,7 +137,9 @@ def _assert_node_service_left_proper_containers_running():
     attempts = 0
     in_standby = False
     while not in_standby:
-        containers = client.containers.list(all=True)
+        # ignore `main_service` container so that in local testing I can use the `main_service`
+        # container while I am running the `node_service` tests.
+        containers = [c for c in client.containers.list(all=True) if c.name != "main_service"]
 
         # all container svc running ?
         for container in containers:
@@ -166,8 +173,10 @@ def _execute_job(
     if send_inputs_through_gcs:
         _upload_function_to_gcs(JOB_ID, my_function)
         _upload_inputs_to_gcs(JOB_ID, my_inputs)
+        _create_job_document_in_database(JOB_ID, SUBJOB_IDS, image, my_packages)
+    else:
+        _create_job_document_in_database(JOB_ID, SUBJOB_IDS, image, my_packages, my_inputs)
 
-    _create_job_document_in_database(JOB_ID, SUBJOB_IDS, image, my_packages)
     if my_packages:
         start_building_environment(JOB_ID, image=my_image if my_image else DEFAULT_IMAGE)
 

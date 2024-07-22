@@ -122,7 +122,11 @@ class SubJobExecutor:
 
     def remove(self):
         if self.exists():
-            self.container.remove(force=True)  # The "force" arg kills it if it's not stopped
+            try:
+                self.container.remove(force=True)  # The "force" arg kills it if it's not stopped
+            except docker.errors.APIError as e:
+                if not "409 Client Error" in str(e):
+                    raise e
 
     def execute(self, job_id: str, function_pkl: Optional[bytes] = None):
         container_is_running = self.exists()

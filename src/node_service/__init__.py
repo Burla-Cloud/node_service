@@ -5,9 +5,8 @@ import traceback
 from uuid import uuid4
 from time import time
 
-from fastapi import FastAPI, Depends, Request, BackgroundTasks
-from fastapi.responses import JSONResponse, Response
-from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi.responses import Response
 from starlette.datastructures import UploadFile
 from google.cloud import logging
 
