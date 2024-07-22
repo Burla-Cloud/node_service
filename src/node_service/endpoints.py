@@ -40,7 +40,10 @@ def get_job_status(
 
     executors_status = [executor.status() for executor in SELF["subjob_executors"]]
     any_failed = any([status == "FAILED" for status in executors_status])
-    all_done = all([(status == "DONE") or (status == "FAILED") for status in executors_status])
+    all_done = all([status == "DONE" for status in executors_status])
+
+    # TODO: remove, this is temporary debugging code.
+    logger.log(f"STATUS REQUEST FOR {job_id}, executors = {SELF["subjob_executors"]}, executors_status={executors_status}")
 
     if all_done or any_failed:
         previous_containers = SELF["most_recent_container_config"]
@@ -78,7 +81,7 @@ def execute(
             subjob_executor.execute(job_id=job_id, function_pkl=function_pkl)
             subjob_executors_to_keep.append(subjob_executor)
             current_parallelism += 1
-            logger.log(f"Assigned job to executor, current_parallelism={current_parallelism}")
+            logger.log(f"Assigned {job_id} to executor, current_parallelism={current_parallelism}")
         else:
             subjob_executors_to_remove.append(subjob_executor)
 
@@ -125,7 +128,6 @@ def reboot_containers(containers: List[Container]):
         # start instance of every container for every cpu
         threads = []
         for container in containers:
-            docker_client.images.pull(container.image)
             for _ in range(N_CPUS):
                 args = (
                     container.python_version,

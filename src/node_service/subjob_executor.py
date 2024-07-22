@@ -32,6 +32,7 @@ class SubJobExecutor:
     def __init__(self, python_version: str, python_executable: str, image: str, docker_client):
         self.container = None
         attempt = 0
+        docker_client.images.pull(image)
 
         while self.container is None:
             port = next_free_port()
