@@ -5,14 +5,16 @@ import traceback
 from uuid import uuid4
 from time import time
 
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, Depends
 from fastapi.responses import Response
 from starlette.datastructures import UploadFile
 from google.cloud import logging
+from google.cloud import firestore
 
 
 __version__ = "v0.1.37"
 
+INSTANCE_NAME = os.environ.get("INSTANCE_NAME")
 IN_PRODUCTION = os.environ.get("IN_PRODUCTION") == "True"
 IN_DEV = os.environ.get("IN_DEV") == "True"
 PROJECT_ID = "burla-prod" if IN_PRODUCTION else "burla-test"
@@ -22,6 +24,7 @@ N_CPUS = 1 if IN_DEV else os.cpu_count()  # set IN_DEV in your bashrc
 
 GCL_CLIENT = logging.Client().logger("node_service")
 SELF = {
+    "instance_name": None,
     "most_recent_container_config": [],
     "subjob_executors": [],
     "job_id": None,

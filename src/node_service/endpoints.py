@@ -9,7 +9,15 @@ from fastapi import APIRouter, Path, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from google.cloud import firestore
 
-from node_service import PROJECT_ID, SELF, N_CPUS, get_request_json, get_logger, get_request_files
+from node_service import (
+    PROJECT_ID,
+    SELF,
+    N_CPUS,
+    INSTANCE_NAME,
+    get_request_json,
+    get_logger,
+    get_request_files,
+)
 from node_service.helpers import Logger, add_logged_background_task
 from node_service.subjob_executor import SubJobExecutor
 
@@ -94,11 +102,16 @@ def reboot_containers(containers: List[Container]):
     """Kill all containers then start provided containers."""
 
     if SELF["BOOTING"]:
-        raise HTTPException(409, detail=f"Node already BOOTING, unable to satisfy request.")
+        raise HTTPException(409, detail="Node already BOOTING, unable to satisfy request.")
+
     try:
         SELF["RUNNING"] = False
         SELF["BOOTING"] = True
         SELF["subjob_executors"] = []
+
+        node_doc = firestore.Client(project=PROJECT_ID).collection("nodes").document(INSTANCE_NAME)
+        node_doc.update({"status": "BOOTING"})
+
         docker_client = docker.from_env(timeout=240)
 
         # ignore `main_service` container so that in local testing I can use the `main_service`
@@ -158,6 +171,7 @@ def reboot_containers(containers: List[Container]):
             SELF["PLEASE_REBOOT"] = False
             SELF["BOOTING"] = False
             SELF["job_id"] = None
+            node_doc.update({"status": "READY"})
 
     except Exception as e:
         SELF["FAILED"] = True
