@@ -26,7 +26,7 @@ SELF = {
     "subjob_executors": [],
     "job_id": None,
     "PLEASE_REBOOT": True,
-    "REBOOTING": False,
+    "BOOTING": False,
     "RUNNING": False,
     "FAILED": False,
 }
@@ -70,8 +70,8 @@ app.include_router(endpoints_router)
 def get_status():
     if SELF["FAILED"]:
         return {"status": "FAILED"}
-    elif SELF["REBOOTING"]:
-        return {"status": "REBOOTING"}
+    elif SELF["BOOTING"]:
+        return {"status": "BOOTING"}
     elif SELF["PLEASE_REBOOT"]:
         return {"status": "PLEASE_REBOOT"}
     elif SELF["RUNNING"]:

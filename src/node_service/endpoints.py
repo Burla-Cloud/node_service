@@ -62,7 +62,7 @@ def execute(
         raise HTTPException(409, detail=f"Node in state `RUNNING`, unable to satisfy request")
 
     SELF["job_id"] = job_id
-    SELF["RUNNING"] = True  # <- only way to set to false is to call `reboot_containers()`
+    SELF["RUNNING"] = True
     job = firestore.Client(project=PROJECT_ID).collection("jobs").document(job_id).get().to_dict()
 
     # start executing immediately
@@ -93,10 +93,11 @@ def execute(
 def reboot_containers(containers: List[Container]):
     """Kill all containers then start provided containers."""
 
-    # if SELF["RUNNING"]:
-    #     raise HTTPException(409, detail=f"Node in state `RUNNING`, unable to satisfy request")
+    if SELF["BOOTING"]:
+        raise HTTPException(409, detail=f"Node already BOOTING, unable to satisfy request.")
     try:
-        SELF["REBOOTING"] = True
+        SELF["RUNNING"] = False
+        SELF["BOOTING"] = True
         SELF["subjob_executors"] = []
         docker_client = docker.from_env(timeout=240)
 
@@ -155,7 +156,7 @@ def reboot_containers(containers: List[Container]):
             raise Exception("Unable to reboot, not all containers started!")
         else:
             SELF["PLEASE_REBOOT"] = False
-            SELF["REBOOTING"] = False
+            SELF["BOOTING"] = False
             SELF["job_id"] = None
 
     except Exception as e:
