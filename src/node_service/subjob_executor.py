@@ -1,14 +1,16 @@
 import os
 import sys
+import json
 import requests
 import traceback
 from uuid import uuid4
 from time import sleep
+from typing import Optional
 
 from google.cloud import logging
 import docker
 
-from node_service import IN_PRODUCTION, PROJECT_ID
+from node_service import IN_PRODUCTION, PROJECT_ID, IN_DEV
 from node_service.helpers import next_free_port
 
 LOGGER = logging.Client().logger("node_service")
@@ -30,6 +32,7 @@ class SubJobExecutor:
     def __init__(self, python_version: str, python_executable: str, image: str, docker_client):
         self.container = None
         attempt = 0
+        docker_client.images.pull(image)
 
         while self.container is None:
             port = next_free_port()
@@ -41,10 +44,11 @@ class SubJobExecutor:
                     image=image,
                     command=["/bin/sh", "-c", f"{python_executable} -m {gunicorn_command}"],
                     ports={port: port},
-                    volumes=DEVELOPMENT_VOLUMES if os.environ.get("IN_DEV") else {},
+                    volumes=DEVELOPMENT_VOLUMES if IN_DEV else {},
                     environment={
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                         "IN_PRODUCTION": IN_PRODUCTION,
+                        "IN_DEV": IN_DEV,
                     },
                     detach=True,
                 )
@@ -119,25 +123,40 @@ class SubJobExecutor:
 
     def remove(self):
         if self.exists():
-            self.container.remove(force=True)  # The "force" arg kills it if it's not stopped
+            try:
+                self.container.remove(force=True)  # The "force" arg kills it if it's not stopped
+            except docker.errors.APIError as e:
+                if not "409 Client Error" in str(e):
+                    raise e
 
-    def execute(self, job_id: str):
-        if self.exists():
-            response = requests.post(f"{self.host}/jobs/{job_id}", json={})
-            response.raise_for_status()
+    def execute(self, job_id: str, function_pkl: Optional[bytes] = None):
+        container_is_running = self.exists()
+        url = f"{self.host}/jobs/{job_id}"
+
+        if container_is_running and function_pkl:
+            response = requests.post(url, files=dict(function_pkl=function_pkl))
+        elif container_is_running:
+            response = requests.post(url)
         else:
             raise Exception("This executor no longer exists.")
+        response.raise_for_status()
 
     def log_debug_info(self):
-        logs = self.logs() if self.exists() else "Unable to retrieve container logs."
+        container_logs = self.logs() if self.exists() else "Unable to retrieve container logs."
+        container_logs = f"\nERROR INSIDE CONTAINER:\n{container_logs}\n"
+        containers_info = [vars(c) for c in self.docker_client.containers.list(all=True)]
+        containers_info = json.loads(json.dumps(containers_info, default=lambda thing: str(thing)))
         logger = logging.Client().logger("node_service")
-        logger.log_struct({"severity": "ERROR", "container_logs": logs})
-
-        debug_info = [vars(c) for c in self.docker_client.containers.list()]
-        logger.log_struct({"severity": "ERROR", "DEBUG INFO": debug_info})
+        logger.log_struct(
+            {
+                "severity": "ERROR",
+                "LOGS_FROM_FAILED_CONTAINER": container_logs,
+                "CONTAINERS INFO": containers_info,
+            }
+        )
 
         if os.environ.get("IN_DEV"):  # <- to make debugging easier
-            print(logs, file=sys.stderr)
+            print(container_logs, file=sys.stderr)
 
     def status(self, attempt: int = 0):
         try:

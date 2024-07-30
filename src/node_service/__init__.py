@@ -1,47 +1,68 @@
 import os
+import sys
+import json
+import traceback
+from uuid import uuid4
+from time import time
 
-from fastapi import FastAPI, Depends, Request
-from fastapi.responses import JSONResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, Depends
+from fastapi.responses import Response
+from starlette.datastructures import UploadFile
 from google.cloud import logging
+from google.cloud import firestore
 
 
 __version__ = "v0.1.37"
 
+INSTANCE_NAME = os.environ.get("INSTANCE_NAME")
 IN_PRODUCTION = os.environ.get("IN_PRODUCTION") == "True"
+IN_DEV = os.environ.get("IN_DEV") == "True"
 PROJECT_ID = "burla-prod" if IN_PRODUCTION else "burla-test"
 JOBS_BUCKET = "burla-jobs-prod" if PROJECT_ID == "burla-prod" else "burla-jobs"
 # max num containers is 1024 due to some kind of network/port related limit
-N_CPUS = 1 if os.environ.get("IN_DEV") == "True" else os.cpu_count()  # set IN_DEV in your bashrc
+N_CPUS = 1 if IN_DEV else os.cpu_count()  # set IN_DEV in your bashrc
 
+GCL_CLIENT = logging.Client().logger("node_service")
 SELF = {
+    "instance_name": None,
     "most_recent_container_config": [],
     "subjob_executors": [],
     "job_id": None,
     "PLEASE_REBOOT": True,
-    "REBOOTING": False,
+    "BOOTING": False,
     "RUNNING": False,
     "FAILED": False,
 }
 
 
 async def get_request_json(request: Request):
-    return await request.json()
+    try:
+        return await request.json()
+    except:
+        form_data = await request.form()
+        return json.loads(form_data["request_json"])
 
 
-def get_gcl_client():
-    return logging.Client().logger("node_service")
+async def get_request_files(request: Request):
+    """
+    If request is multipart/form data load all files and returns as dict of {filename: bytes}
+    """
+    form_data = await request.form()
+    files = {}
+    for key, value in form_data.items():
+        if isinstance(value, UploadFile):
+            files.update({key: await value.read()})
+
+    if files:
+        return files
 
 
-def get_logger(
-    request: Request,
-    gcl_client: logging.Client = Depends(get_gcl_client),
-):
-    return Logger(request=request, gcl_client=gcl_client)
+def get_logger(request: Request):
+    return Logger(request=request)
 
 
 from node_service.endpoints import router as endpoints_router
-from node_service.helpers import Logger
+from node_service.helpers import Logger, add_logged_background_task, format_traceback
 
 
 app = FastAPI(docs_url=None, redoc_url=None)
@@ -52,8 +73,8 @@ app.include_router(endpoints_router)
 def get_status():
     if SELF["FAILED"]:
         return {"status": "FAILED"}
-    elif SELF["REBOOTING"]:
-        return {"status": "REBOOTING"}
+    elif SELF["BOOTING"]:
+        return {"status": "BOOTING"}
     elif SELF["PLEASE_REBOOT"]:
         return {"status": "PLEASE_REBOOT"}
     elif SELF["RUNNING"]:
@@ -67,12 +88,46 @@ def version_endpoint():
     return {"version": __version__}
 
 
-@app.exception_handler(Exception)
-async def log_exception_before_returning(request: Request, exc: Exception):
-    # I can't figure out how to get the already-created logger instance into this function,
-    # So instead, reinstantiate the logger:
-    get_logger(request=request, gcl_client=get_gcl_client()).log_exception(exc)
-    if isinstance(exc, StarletteHTTPException):
-        return JSONResponse(status_code=exc.status_code, content=f'{{"error": {str(exc)}}}')
-    else:
-        return JSONResponse(status_code=500, content='{"error": "Internal Server Error."}')
+@app.middleware("http")
+async def log_and_time_requests__log_errors(request: Request, call_next):
+    """
+    Fastapi `@app.exception_handler` will completely hide errors if middleware is used.
+    Catching errors in a `Depends` function will not distinguish
+        http errors originating here vs other services.
+    """
+    start = time()
+    request.state.uuid = uuid4().hex
+
+    # If `get_logger` was a dependency this will be the second time a Logger is created.
+    # This is fine because creating this object only attaches the `request` to a function.
+    logger = Logger(request)
+
+    # Important to note that HTTP exceptions do not raise errors here!
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        # create new response object to return gracefully.
+        response = Response(status_code=500, content="Internal server error.")
+        response.background = BackgroundTasks()
+
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        traceback_str = format_traceback(tb_details)
+        add_logged_background_task(
+            response.background, logger, logger.log, str(e), "ERROR", traceback=traceback_str
+        )
+
+    response_contains_background_tasks = getattr(response, "background") is not None
+    if not response_contains_background_tasks:
+        response.background = BackgroundTasks()
+
+    if not IN_DEV:
+        msg = f"Received {request.method} at {request.url}"
+        add_logged_background_task(response.background, logger, logger.log, msg)
+
+        status = response.status_code
+        latency = time() - start
+        msg = f"{request.method} to {request.url} returned {status} after {latency} seconds."
+        add_logged_background_task(response.background, logger, logger.log, msg, latency=latency)
+
+    return response

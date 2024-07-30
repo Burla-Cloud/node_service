@@ -1,6 +1,7 @@
 import requests
 from typing import List
 from threading import Thread
+from typing import Optional
 
 import docker
 from docker.errors import APIError, NotFound
@@ -8,7 +9,15 @@ from fastapi import APIRouter, Path, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from google.cloud import firestore
 
-from node_service import PROJECT_ID, SELF, N_CPUS, get_request_json, get_logger
+from node_service import (
+    PROJECT_ID,
+    SELF,
+    N_CPUS,
+    INSTANCE_NAME,
+    get_request_json,
+    get_logger,
+    get_request_files,
+)
 from node_service.helpers import Logger, add_logged_background_task
 from node_service.subjob_executor import SubJobExecutor
 
@@ -39,14 +48,12 @@ def get_job_status(
 
     executors_status = [executor.status() for executor in SELF["subjob_executors"]]
     any_failed = any([status == "FAILED" for status in executors_status])
-    all_done = all([(status == "DONE") or (status == "FAILED") for status in executors_status])
+    all_done = all([status == "DONE" for status in executors_status])
 
     if all_done or any_failed:
         previous_containers = SELF["most_recent_container_config"]
         SELF["RUNNING"] = False
-        add_logged_background_task(
-            background_tasks, logger, reboot_containers, previous_containers, logger
-        )
+        add_logged_background_task(background_tasks, logger, reboot_containers, previous_containers)
 
     return {"all_subjobs_done": all_done, "any_subjobs_failed": any_failed}
 
@@ -57,12 +64,13 @@ def execute(
     job_id: str = Path(...),
     request_json: dict = Depends(get_request_json),
     logger: Logger = Depends(get_logger),
+    request_files: Optional[dict] = Depends(get_request_files),
 ):
     if SELF["RUNNING"]:
         raise HTTPException(409, detail=f"Node in state `RUNNING`, unable to satisfy request")
 
     SELF["job_id"] = job_id
-    SELF["RUNNING"] = True  # <- only way to set to false is to call `reboot_containers()`
+    SELF["RUNNING"] = True
     job = firestore.Client(project=PROJECT_ID).collection("jobs").document(job_id).get().to_dict()
 
     # start executing immediately
@@ -74,12 +82,16 @@ def execute(
         need_more_parallelism = current_parallelism < request_json["parallelism"]
 
         if correct_python_version and need_more_parallelism:
-            subjob_executor.execute(job_id)
+            function_pkl = (request_files or {}).get("function_pkl")
+            subjob_executor.execute(job_id=job_id, function_pkl=function_pkl)
             subjob_executors_to_keep.append(subjob_executor)
             current_parallelism += 1
-            logger.log(f"Assigned job to executor, current_parallelism={current_parallelism}")
+            logger.log(f"Assigned {job_id} to executor, current_parallelism={current_parallelism}")
         else:
             subjob_executors_to_remove.append(subjob_executor)
+
+    if not subjob_executors_to_keep:
+        raise Exception("No qualified subjob executors?")
 
     SELF["subjob_executors"] = subjob_executors_to_keep
     _remove_subjob_executors_async(subjob_executors_to_remove, background_tasks, logger)
@@ -89,18 +101,29 @@ def execute(
 
 # TODO: should take in num container sets to start.
 @router.post("/reboot")
-def reboot_containers(containers: List[Container], logger: Logger = Depends(get_logger)):
+def reboot_containers(containers: List[Container]):
     """Kill all containers then start provided containers."""
 
-    # if SELF["RUNNING"]:
-    #     raise HTTPException(409, detail=f"Node in state `RUNNING`, unable to satisfy request")
+    if SELF["BOOTING"]:
+        raise HTTPException(409, detail="Node already BOOTING, unable to satisfy request.")
+
     try:
-        SELF["REBOOTING"] = True
+        SELF["RUNNING"] = False
+        SELF["BOOTING"] = True
         SELF["subjob_executors"] = []
+
+        node_doc = firestore.Client(project=PROJECT_ID).collection("nodes").document(INSTANCE_NAME)
+        node_doc.update({"status": "BOOTING"})
+
         docker_client = docker.from_env(timeout=240)
 
+        # ignore `main_service` container so that in local testing I can use the `main_service`
+        # container while I am running the `node_service` tests.
+        current_containers = docker_client.containers.list(all=True)
+        current_containers = [c for c in current_containers if c.name != "main_service"]
+
         # remove all current containers
-        for container in docker_client.containers.list(all=True):
+        for container in current_containers:
             try:
                 container.remove(force=True)
             except (APIError, NotFound, requests.exceptions.HTTPError) as e:
@@ -119,7 +142,6 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
         # start instance of every container for every cpu
         threads = []
         for container in containers:
-            docker_client.images.pull(container.image)
             for _ in range(N_CPUS):
                 args = (
                     container.python_version,
@@ -134,18 +156,25 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
         for thread in threads:
             thread.join()
 
+        # ignore `main_service` container so that in local testing I can use the `main_service`
+        # container while I am running the `node_service` tests.
+        current_containers = docker_client.containers.list(all=True)
+        current_containers = [c for c in current_containers if c.name != "main_service"]
+
         # Sometimes on larger machines, some containers don't start, or get stuck in "CREATED" state
         # This has not been diagnosed, this check is performed to ensure all containers started.
-        containers_status = [c.status for c in docker_client.containers.list(all=True)]
+        containers_status = [c.status for c in current_containers]
         num_running_containers = sum([status == "running" for status in containers_status])
         some_containers_missing = num_running_containers != (N_CPUS * len(containers))
 
         if some_containers_missing:
             SELF["FAILED"] = True
+            raise Exception("Unable to reboot, not all containers started!")
         else:
             SELF["PLEASE_REBOOT"] = False
-            SELF["REBOOTING"] = False
+            SELF["BOOTING"] = False
             SELF["job_id"] = None
+            node_doc.update({"status": "READY"})
 
     except Exception as e:
         SELF["FAILED"] = True

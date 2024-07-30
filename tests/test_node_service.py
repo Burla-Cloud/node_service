@@ -1,9 +1,10 @@
 import sys
+import json
 import pickle
 import pytest
 import requests
 from uuid import uuid4
-from time import sleep, time
+from time import sleep
 from six import reraise
 
 import cloudpickle
@@ -40,24 +41,29 @@ def _upload_inputs_to_gcs(job_id, _inputs):
         blob.upload_from_string(data=pickled_input, content_type="application/octet-stream")
 
 
-def _create_job_document_in_database(job_id, subjob_ids, image, dependencies):
+def _create_job_document_in_database(job_id, subjob_ids, image, dependencies, inputs):
     db = firestore.Client(project="burla-test")
     job_ref = db.collection("jobs").document(job_id)
     job_ref.set(
         {
             "test": True,
             "function_uri": f"gs://burla-jobs/12345/{job_id}/function.pkl",
-            "python_version": f"3.{sys.version_info.minor}",
             "env": {
                 "is_copied_from_client": bool(dependencies),
                 "image": image,
                 "packages": dependencies,
+                "python_version": f"3.{sys.version_info.minor}",
             },
         }
     )
     sub_jobs_collection = job_ref.collection("sub_jobs")
-    for subjob_id in subjob_ids:
-        sub_jobs_collection.document(str(subjob_id)).set({"claimed": False})
+    if inputs:
+        for subjob_id, input in zip(subjob_ids, inputs):
+            subjob = {"claimed": False, "input_pkl": cloudpickle.dumps(input)}
+            sub_jobs_collection.document(str(subjob_id)).set(subjob)
+    else:
+        for subjob_id in subjob_ids:
+            sub_jobs_collection.document(str(subjob_id)).set({"claimed": False})
 
 
 def _retrieve_and_raise_errors(job_id, subjob_ids):
@@ -131,7 +137,9 @@ def _assert_node_service_left_proper_containers_running():
     attempts = 0
     in_standby = False
     while not in_standby:
-        containers = client.containers.list(all=True)
+        # ignore `main_service` container so that in local testing I can use the `main_service`
+        # container while I am running the `node_service` tests.
+        containers = [c for c in client.containers.list(all=True) if c.name != "main_service"]
 
         # all container svc running ?
         for container in containers:
@@ -153,22 +161,33 @@ def _assert_node_service_left_proper_containers_running():
         attempts += 1
 
 
-def _execute_job(node_svc_hostname, my_function, my_inputs, my_packages, my_image):
+def _execute_job(
+    node_svc_hostname, my_function, my_inputs, my_packages, my_image, send_inputs_through_gcs=False
+):
     JOB_ID = str(uuid4()) + "-test"
     SUBJOB_IDS = list(range(len(my_inputs)))
 
     DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest"
     image = my_image if my_image else DEFAULT_IMAGE
 
-    _upload_function_to_gcs(JOB_ID, my_function)
-    _upload_inputs_to_gcs(JOB_ID, my_inputs)
-    _create_job_document_in_database(JOB_ID, SUBJOB_IDS, image, my_packages)
+    if send_inputs_through_gcs:
+        _upload_function_to_gcs(JOB_ID, my_function)
+        _upload_inputs_to_gcs(JOB_ID, my_inputs)
+        _create_job_document_in_database(JOB_ID, SUBJOB_IDS, image, my_packages)
+    else:
+        _create_job_document_in_database(JOB_ID, SUBJOB_IDS, image, my_packages, my_inputs)
+
     if my_packages:
         start_building_environment(JOB_ID, image=my_image if my_image else DEFAULT_IMAGE)
 
     # request job execution
-    job_requested_at = time()
-    response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", json={"parallelism": 1})
+    if send_inputs_through_gcs:
+        response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", json={"parallelism": 1})
+    else:
+        function_pkl = cloudpickle.dumps(my_function)
+        files = dict(function_pkl=function_pkl)
+        data = dict(request_json=json.dumps({"parallelism": 1}))
+        response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", files=files, data=data)
     response.raise_for_status()
 
     # loop until job is done
@@ -194,7 +213,6 @@ def _execute_job(node_svc_hostname, my_function, my_inputs, my_packages, my_imag
             raise Exception("TIMEOUT: Job took > 3 minutes to finish?")
 
     _retrieve_and_raise_errors(JOB_ID, SUBJOB_IDS)
-    # _print_udf_response_times(job_requested_at, JOB_ID, SUBJOB_IDS)
     return_values = _download_return_values_from_gcs(JOB_ID, SUBJOB_IDS)
     return return_values
 
