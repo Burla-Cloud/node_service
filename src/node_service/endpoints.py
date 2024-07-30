@@ -90,6 +90,9 @@ def execute(
         else:
             subjob_executors_to_remove.append(subjob_executor)
 
+    if not subjob_executors_to_keep:
+        raise Exception("No qualified subjob executors?")
+
     SELF["subjob_executors"] = subjob_executors_to_keep
     _remove_subjob_executors_async(subjob_executors_to_remove, background_tasks, logger)
 
