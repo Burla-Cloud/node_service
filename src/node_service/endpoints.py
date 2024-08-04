@@ -71,6 +71,9 @@ def execute(
 
     SELF["job_id"] = job_id
     SELF["RUNNING"] = True
+    node_doc = firestore.Client(project=PROJECT_ID).collection("nodes").document(INSTANCE_NAME)
+    node_doc.update({"status": "RUNNING", "current_job": job_id})
+
     job = firestore.Client(project=PROJECT_ID).collection("jobs").document(job_id).get().to_dict()
 
     # start executing immediately
@@ -103,6 +106,11 @@ def execute(
 @router.post("/reboot")
 def reboot_containers(containers: List[Container]):
     """Kill all containers then start provided containers."""
+
+    # TODO: seems to have like a 1/5 chance (only after running a job) of throwing a:
+    # `Unable to reboot, not all containers started!`
+    # Error, prececed by many `PORT ALREADY IN USE, TRYING AGAIN.`'s
+    # reconcile does a good job of cleaning these nodes up!
 
     if SELF["BOOTING"]:
         raise HTTPException(409, detail="Node already BOOTING, unable to satisfy request.")
