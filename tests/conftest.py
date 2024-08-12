@@ -16,11 +16,6 @@ HOSTNAME = f"http://127.0.0.1:{PORT}"
 CONTAINERS = [
     {
         "image": "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest",
-        "python_executable": "/.pyenv/versions/3.9.*/bin/python3.9",
-        "python_version": "3.9",
-    },
-    {
-        "image": "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest",
         "python_executable": "/.pyenv/versions/3.10.*/bin/python3.10",
         "python_version": "3.10",
     },

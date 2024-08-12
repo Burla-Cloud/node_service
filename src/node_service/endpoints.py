@@ -53,7 +53,10 @@ def get_job_status(
     if all_done or any_failed:
         previous_containers = SELF["most_recent_container_config"]
         SELF["RUNNING"] = False
-        add_logged_background_task(background_tasks, logger, reboot_containers, previous_containers)
+        if not SELF["BOOTING"]:
+            add_logged_background_task(
+                background_tasks, logger, reboot_containers, previous_containers
+            )
 
     return {"all_subjobs_done": all_done, "any_subjobs_failed": any_failed}
 
@@ -89,7 +92,6 @@ def execute(
             subjob_executor.execute(job_id=job_id, function_pkl=function_pkl)
             subjob_executors_to_keep.append(subjob_executor)
             current_parallelism += 1
-            logger.log(f"Assigned {job_id} to executor, current_parallelism={current_parallelism}")
         else:
             subjob_executors_to_remove.append(subjob_executor)
 
