@@ -236,7 +236,7 @@ def _execute_job(
     attempts = 0
     outputs = []
     sleep_duration = 2
-    while len(outputs) != len(my_inputs):
+    while len(outputs) < len(my_inputs):
         sleep(sleep_duration)
 
         while not output_queue.empty():

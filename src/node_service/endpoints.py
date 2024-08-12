@@ -2,6 +2,7 @@ import requests
 from typing import List
 from threading import Thread
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
 
 import docker
 from docker.errors import APIError, NotFound
@@ -79,21 +80,27 @@ def execute(
 
     job = firestore.Client(project=PROJECT_ID).collection("jobs").document(job_id).get().to_dict()
 
-    # start executing immediately
+    # determine which executors to call and which to remove
     subjob_executors_to_remove = []
     subjob_executors_to_keep = []
-    current_parallelism = 0
+    future_parallelism = 0
     for subjob_executor in SELF["subjob_executors"]:
         correct_python_version = subjob_executor.python_version == job["env"]["python_version"]
-        need_more_parallelism = current_parallelism < request_json["parallelism"]
-
+        need_more_parallelism = future_parallelism < request_json["parallelism"]
         if correct_python_version and need_more_parallelism:
-            function_pkl = (request_files or {}).get("function_pkl")
-            subjob_executor.execute(job_id=job_id, function_pkl=function_pkl)
             subjob_executors_to_keep.append(subjob_executor)
-            current_parallelism += 1
+            future_parallelism += 1
         else:
             subjob_executors_to_remove.append(subjob_executor)
+
+    # call all compatible executors concurrently:
+    def request_execution(subjob_executor):
+        function_pkl = (request_files or {}).get("function_pkl")
+        subjob_executor.execute(job_id=job_id, function_pkl=function_pkl)
+
+    with ThreadPoolExecutor() as executor:
+        for subjob_executor in subjob_executors_to_keep:
+            executor.submit(request_execution, subjob_executor)
 
     if not subjob_executors_to_keep:
         raise Exception("No qualified subjob executors?")
