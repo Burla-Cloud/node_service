@@ -1,4 +1,5 @@
 import requests
+from time import time
 from typing import List
 from threading import Thread
 from typing import Optional
@@ -75,10 +76,14 @@ def execute(
 
     SELF["job_id"] = job_id
     SELF["RUNNING"] = True
-    node_doc = firestore.Client(project=PROJECT_ID).collection("nodes").document(INSTANCE_NAME)
+    db = firestore.Client(project=PROJECT_ID)
+    node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update({"status": "RUNNING", "current_job": job_id})
 
-    job = firestore.Client(project=PROJECT_ID).collection("jobs").document(job_id).get().to_dict()
+    job_ref = db.collection("jobs").document(job_id)
+    job = job_ref.get().to_dict()
+
+    job_ref.update({"benchmark.sorting_executors": time()})
 
     # determine which executors to call and which to remove
     subjob_executors_to_remove = []
@@ -93,6 +98,8 @@ def execute(
         else:
             subjob_executors_to_remove.append(subjob_executor)
 
+    job_ref.update({"benchmark.begin_executing": time()})
+
     # call all compatible executors concurrently:
     def request_execution(subjob_executor):
         function_pkl = (request_files or {}).get("function_pkl")
@@ -101,6 +108,8 @@ def execute(
     with ThreadPoolExecutor() as executor:
         for subjob_executor in subjob_executors_to_keep:
             executor.submit(request_execution, subjob_executor)
+
+    job_ref.update({"benchmark.done_begin_executing": time()})
 
     if not subjob_executors_to_keep:
         raise Exception("No qualified subjob executors?")
