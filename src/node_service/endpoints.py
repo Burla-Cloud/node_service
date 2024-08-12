@@ -104,7 +104,7 @@ def execute(
 
 # TODO: should take in num container sets to start.
 @router.post("/reboot")
-def reboot_containers(containers: List[Container]):
+def reboot_containers(containers: List[Container], logger: Logger = Depends(get_logger)):
     """Kill all containers then start provided containers."""
 
     # TODO: seems to have like a 1/5 chance (only after running a job) of throwing a:
@@ -145,7 +145,7 @@ def reboot_containers(containers: List[Container]):
                 subjob_executor = SubJobExecutor(*a, **kw)
                 SELF["subjob_executors"].append(subjob_executor)
             except Exception as e:
-                Logger().log_exception(e)
+                logger.log_exception(e)
 
         # start instance of every container for every cpu
         threads = []
