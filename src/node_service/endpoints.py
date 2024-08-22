@@ -106,8 +106,8 @@ def execute(
         )
         logger.log(f"subjob_executor.python_version: {subjob_executor.python_version}")
         logger.log(f"subjob_executor.python_version: {subjob_executor.python_version}")
-        logger.log(f"job env python: {job["env"]["python_version"]}")
-        logger.log(f"request json parallelism: {request_json["parallelism"]}")
+        logger.log(f"job env python: {job['env']['python_version']}")
+        logger.log(f"request json parallelism: {request_json['parallelism']}")
 
         if correct_python_version and need_more_parallelism:
             logger.log("ADDING EXECUTOR")
