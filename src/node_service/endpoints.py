@@ -107,11 +107,11 @@ def execute(
         print(f"request json parallelism: {request_json['parallelism']}")
 
         if correct_python_version and need_more_parallelism:
-            logger.log("ADDING EXECUTOR")
+            print("ADDING EXECUTOR")
             executors_to_keep.append(subjob_executor)
             future_parallelism += 1
         else:
-            logger.log("REMOVING EXECUTOR")
+            print("REMOVING EXECUTOR")
             executors_to_remove.append(subjob_executor)
 
     # call executors concurrently
