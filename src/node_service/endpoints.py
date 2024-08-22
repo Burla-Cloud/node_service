@@ -93,21 +93,18 @@ def execute(
     executors_to_remove = []
     executors_to_keep = []
     future_parallelism = 0
-    print(f"THIS IS A TEST \n\n\n\nHERE\n\n\n")
-    logger.log(SELF["subjob_executors"])
+    print(f"subjob_executors: {SELF['subjob_executors']}")
     for subjob_executor in SELF["subjob_executors"]:
         correct_python_version = subjob_executor.python_version == job["env"]["python_version"]
         need_more_parallelism = future_parallelism < request_json["parallelism"]
-        logger.log(f"need_more_parallelism: {need_more_parallelism}")
-        logger.log(f"future_parallelism: {future_parallelism}")
-        logger.log(f"correct_python_version: {correct_python_version}")
-        logger.log(
-            f"correct_python_version and need_more_parallelism: {correct_python_version and need_more_parallelism}"
-        )
-        logger.log(f"subjob_executor.python_version: {subjob_executor.python_version}")
-        logger.log(f"subjob_executor.python_version: {subjob_executor.python_version}")
-        logger.log(f"job env python: {job['env']['python_version']}")
-        logger.log(f"request json parallelism: {request_json['parallelism']}")
+        print(f"need_more_parallelism: {need_more_parallelism}")
+        print(f"future_parallelism: {future_parallelism}")
+        print(f"correct_python_version: {correct_python_version}")
+        print(f"correct_pv and need_more_p: {correct_python_version and need_more_parallelism}")
+        print(f"subjob_executor.python_version: {subjob_executor.python_version}")
+        print(f"subjob_executor.python_version: {subjob_executor.python_version}")
+        print(f"job env python: {job['env']['python_version']}")
+        print(f"request json parallelism: {request_json['parallelism']}")
 
         if correct_python_version and need_more_parallelism:
             logger.log("ADDING EXECUTOR")
