@@ -1,9 +1,12 @@
+import sys
 import requests
 from time import time
 from typing import List
 from threading import Thread
 from typing import Optional
-from concurrent.futures import ThreadPoolExecutor
+import traceback
+import asyncio
+import aiohttp
 
 import docker
 from docker.errors import APIError, NotFound
@@ -20,7 +23,7 @@ from node_service import (
     get_logger,
     get_request_files,
 )
-from node_service.helpers import Logger, add_logged_background_task
+from node_service.helpers import Logger, add_logged_background_task, format_traceback
 from node_service.subjob_executor import SubJobExecutor
 
 router = APIRouter()
@@ -76,6 +79,7 @@ def execute(
 
     SELF["job_id"] = job_id
     SELF["RUNNING"] = True
+    function_pkl = (request_files or {}).get("function_pkl")
     db = firestore.Client(project=PROJECT_ID)
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update({"status": "RUNNING", "current_job": job_id})
@@ -86,36 +90,54 @@ def execute(
     job_ref.update({"benchmark.sorting_executors": time()})
 
     # determine which executors to call and which to remove
-    subjob_executors_to_remove = []
-    subjob_executors_to_keep = []
+    executors_to_remove = []
+    executors_to_keep = []
     future_parallelism = 0
+    print(f"THIS IS A TEST \n\n\n\nHERE\n\n\n")
+    logger.log(SELF["subjob_executors"])
     for subjob_executor in SELF["subjob_executors"]:
         correct_python_version = subjob_executor.python_version == job["env"]["python_version"]
         need_more_parallelism = future_parallelism < request_json["parallelism"]
+        logger.log(f"need_more_parallelism: {need_more_parallelism}")
+        logger.log(f"future_parallelism: {future_parallelism}")
+        logger.log(f"correct_python_version: {correct_python_version}")
+        logger.log(
+            f"correct_python_version and need_more_parallelism: {correct_python_version and need_more_parallelism}"
+        )
+        logger.log(f"subjob_executor.python_version: {subjob_executor.python_version}")
+        logger.log(f"subjob_executor.python_version: {subjob_executor.python_version}")
+        logger.log(f"job env python: {job["env"]["python_version"]}")
+        logger.log(f"request json parallelism: {request_json["parallelism"]}")
+
         if correct_python_version and need_more_parallelism:
-            subjob_executors_to_keep.append(subjob_executor)
+            logger.log("ADDING EXECUTOR")
+            executors_to_keep.append(subjob_executor)
             future_parallelism += 1
         else:
-            subjob_executors_to_remove.append(subjob_executor)
+            logger.log("REMOVING EXECUTOR")
+            executors_to_remove.append(subjob_executor)
 
-    job_ref.update({"benchmark.begin_executing": time()})
+    # call executors concurrently
+    async def request_execution(session, url):
+        async with session.post(url, data={"function_pkl": function_pkl}) as response:
+            response.raise_for_status()
 
-    # call all compatible executors concurrently:
-    def request_execution(subjob_executor):
-        function_pkl = (request_files or {}).get("function_pkl")
-        subjob_executor.execute(job_id=job_id, function_pkl=function_pkl)
+    async def request_executions(executors):
+        async with aiohttp.ClientSession() as session:
+            tasks = [request_execution(session, f"{e.host}/jobs/{job_id}") for e in executors]
+            await asyncio.gather(*tasks)
 
-    with ThreadPoolExecutor() as executor:
-        for subjob_executor in subjob_executors_to_keep:
-            executor.submit(request_execution, subjob_executor)
+    begin_executing = time()
+    asyncio.run(request_executions(executors_to_keep))
+    job_ref.update(
+        {"benchmark.done_begin_executing": time(), "benchmark.begin_executing": begin_executing}
+    )
 
-    job_ref.update({"benchmark.done_begin_executing": time()})
-
-    if not subjob_executors_to_keep:
+    if not executors_to_keep:
         raise Exception("No qualified subjob executors?")
 
-    SELF["subjob_executors"] = subjob_executors_to_keep
-    _remove_subjob_executors_async(subjob_executors_to_remove, background_tasks, logger)
+    SELF["subjob_executors"] = executors_to_keep
+    _remove_subjob_executors_async(executors_to_remove, background_tasks, logger)
 
     return "Success"
 
@@ -163,7 +185,10 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
                 subjob_executor = SubJobExecutor(*a, **kw)
                 SELF["subjob_executors"].append(subjob_executor)
             except Exception as e:
-                logger.log_exception(e)
+                exc_type, exc_value, exc_traceback = sys.exc_info()
+                tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+                traceback_str = format_traceback(tb_details)
+                logger.log(str(e), "ERROR", traceback=traceback_str)
 
         # start instance of every container for every cpu
         threads = []
