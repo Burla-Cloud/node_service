@@ -1,15 +1,12 @@
 import sys
 import socket
-import traceback
 from itertools import groupby
-from typing import Callable
 from datetime import datetime, timedelta, timezone
 
 from collections import deque
 
-from fastapi import Request, BackgroundTasks
-from node_service import __version__, IN_DEV, GCL_CLIENT
-from node_service.endpoints import SELF
+from fastapi import Request
+from node_service import __version__, IN_DEV, GCL_CLIENT, SELF
 
 
 PRIVATE_PORT_QUEUE = deque(range(32768, 60999))  # <- these ports should be mostly free.
@@ -92,29 +89,3 @@ class Logger:
         else:
             struct = dict(message=message, request=self.loggable_request, **kw)
             GCL_CLIENT.log_struct(struct, severity=severity)
-
-
-def add_logged_background_task(
-    background_tasks: BackgroundTasks, logger: Logger, func: Callable, *a, **kw
-):
-    """
-    Errors thrown in background tasks are completely hidden and ignored by default.
-    - BackgroundTasks class cannot be reliably monkeypatched
-    - BackgroundTasks cannot be reliably modified in middleware
-    - BackgroundTasks cannot be returned by dependencies (`fastapi.Depends`)
-    Hopefully I remember to use this function everytime I would normally call `.add_task` 😀🔫
-    """
-    tb_details = traceback.format_list(traceback.extract_stack()[:-1])
-    parent_traceback = "Traceback (most recent call last):\n" + format_traceback(tb_details)
-
-    def func_logged(*a, **kw):
-        try:
-            return func(*a, **kw)
-        except Exception as e:
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
-            local_traceback_no_title = "\n".join(format_traceback(tb_details).split("\n")[1:])
-            traceback_str = parent_traceback + local_traceback_no_title
-            logger.log(message=str(e), severity="ERROR", traceback=traceback_str)
-
-    background_tasks.add_task(func_logged, *a, **kw)

@@ -34,6 +34,8 @@ SELF = {
     "FAILED": False,
 }
 
+from node_service.helpers import Logger
+
 
 async def get_request_json(request: Request):
     try:
@@ -83,9 +85,8 @@ def get_add_background_task_function(
     return add_logged_background_task
 
 
+from node_service.helpers import Logger, format_traceback
 from node_service.endpoints import router as endpoints_router
-from node_service.helpers import Logger, add_logged_background_task, format_traceback
-
 
 app = FastAPI(docs_url=None, redoc_url=None)
 app.include_router(endpoints_router)
