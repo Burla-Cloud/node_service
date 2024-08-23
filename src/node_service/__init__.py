@@ -4,8 +4,9 @@ import json
 import traceback
 from uuid import uuid4
 from time import time
+from typing import Callable
 
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.datastructures import UploadFile
 from google.cloud import logging
@@ -58,6 +59,28 @@ async def get_request_files(request: Request):
 
 def get_logger(request: Request):
     return Logger(request=request)
+
+
+def get_add_background_task_function(
+    background_tasks: BackgroundTasks, logger: Logger = Depends(get_logger)
+):
+    def add_logged_background_task(func: Callable, *a, **kw):
+        tb_details = traceback.format_list(traceback.extract_stack()[:-1])
+        parent_traceback = "Traceback (most recent call last):\n" + format_traceback(tb_details)
+
+        def func_logged(*a, **kw):
+            try:
+                return func(*a, **kw)
+            except Exception as e:
+                exc_type, exc_value, exc_traceback = sys.exc_info()
+                tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+                local_traceback_no_title = "\n".join(format_traceback(tb_details).split("\n")[1:])
+                traceback_str = parent_traceback + local_traceback_no_title
+                logger.log(message=str(e), severity="ERROR", traceback=traceback_str)
+
+        background_tasks.add_task(func_logged, *a, **kw)
+
+    return add_logged_background_task
 
 
 from node_service.endpoints import router as endpoints_router

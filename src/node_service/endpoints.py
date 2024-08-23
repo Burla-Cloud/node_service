@@ -3,14 +3,14 @@ import requests
 from time import time
 from typing import List
 from threading import Thread
-from typing import Optional
+from typing import Optional, Callable
 import traceback
 import asyncio
 import aiohttp
 
 import docker
 from docker.errors import APIError, NotFound
-from fastapi import APIRouter, Path, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, Path, HTTPException, Depends
 from pydantic import BaseModel
 from google.cloud import firestore
 
@@ -22,8 +22,9 @@ from node_service import (
     get_request_json,
     get_logger,
     get_request_files,
+    get_add_background_task_function,
 )
-from node_service.helpers import Logger, add_logged_background_task, format_traceback
+from node_service.helpers import Logger, format_traceback
 from node_service.subjob_executor import SubJobExecutor
 
 router = APIRouter()
@@ -35,18 +36,10 @@ class Container(BaseModel):
     python_version: str
 
 
-def _remove_subjob_executors_async(
-    executors_to_remove: List[SubJobExecutor], background_tasks: BackgroundTasks, logger: Logger
-):
-    remove_executors = lambda executors: [executor.remove() for executor in executors]
-    add_logged_background_task(
-        background_tasks, logger, remove_executors, executors=executors_to_remove
-    )
-
-
 @router.get("/jobs/{job_id}")
 def get_job_status(
-    background_tasks: BackgroundTasks, job_id: str = Path(...), logger: Logger = Depends(get_logger)
+    job_id: str = Path(...),
+    add_background_task: Callable = Depends(get_add_background_task_function),
 ):
     if not job_id == SELF["job_id"]:
         raise HTTPException(404)
@@ -59,20 +52,18 @@ def get_job_status(
         previous_containers = SELF["most_recent_container_config"]
         SELF["RUNNING"] = False
         if not SELF["BOOTING"]:
-            add_logged_background_task(
-                background_tasks, logger, reboot_containers, previous_containers
-            )
+            add_background_task(reboot_containers, previous_containers)
 
     return {"all_subjobs_done": all_done, "any_subjobs_failed": any_failed}
 
 
 @router.post("/jobs/{job_id}")
 def execute(
-    background_tasks: BackgroundTasks,
     job_id: str = Path(...),
     request_json: dict = Depends(get_request_json),
-    logger: Logger = Depends(get_logger),
     request_files: Optional[dict] = Depends(get_request_files),
+    logger: Logger = Depends(get_logger),
+    add_background_task: Callable = Depends(get_add_background_task_function),
 ):
     if SELF["RUNNING"]:
         raise HTTPException(409, detail=f"Node in state `RUNNING`, unable to satisfy request")
@@ -87,30 +78,18 @@ def execute(
     job_ref = db.collection("jobs").document(job_id)
     job = job_ref.get().to_dict()
 
-    job_ref.update({"benchmark.sorting_executors": time()})
-
     # determine which executors to call and which to remove
     executors_to_remove = []
     executors_to_keep = []
     future_parallelism = 0
-    print(f"subjob_executors: {SELF['subjob_executors']}")
     for subjob_executor in SELF["subjob_executors"]:
         correct_python_version = subjob_executor.python_version == job["env"]["python_version"]
         need_more_parallelism = future_parallelism < request_json["parallelism"]
-        print(f"need_more_parallelism: {need_more_parallelism}")
-        print(f"future_parallelism: {future_parallelism}")
-        print(f"correct_python_version: {correct_python_version}")
-        print(f"correct_pv and need_more_p: {correct_python_version and need_more_parallelism}")
-        print(f"subjob_executor.python_version: {subjob_executor.python_version}")
-        print(f"job env python: {job['env']['python_version']}")
-        print(f"request json parallelism: {request_json['parallelism']}")
 
         if correct_python_version and need_more_parallelism:
-            print("ADDING EXECUTOR-----------------------------------------------")
             executors_to_keep.append(subjob_executor)
             future_parallelism += 1
         else:
-            print("REMOVING EXECUTOR-------------------------------------------------")
             executors_to_remove.append(subjob_executor)
 
     # call executors concurrently
@@ -125,14 +104,15 @@ def execute(
 
     begin_executing = time()
     asyncio.run(request_executions(executors_to_keep))
-    node_doc.update({"parallelism": len(executors_to_keep)})
     job_ref.update({"benchmark.done_begin_exe": time(), "benchmark.begin_exe": begin_executing})
 
     if not executors_to_keep:
         raise Exception("No qualified subjob executors?")
 
     SELF["subjob_executors"] = executors_to_keep
-    _remove_subjob_executors_async(executors_to_remove, background_tasks, logger)
+    remove_executors = lambda executors: [executor.remove() for executor in executors]
+    add_background_task(remove_executors, executors_to_remove)
+    add_background_task(logger.log, f"Started executing job at parallelism: {future_parallelism}")
 
 
 # TODO: should take in num container sets to start.
@@ -153,10 +133,16 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
         SELF["BOOTING"] = True
         SELF["subjob_executors"] = []
 
-        node_doc = firestore.Client(project=PROJECT_ID).collection("nodes").document(INSTANCE_NAME)
-        node_doc.update({"status": "BOOTING"})
-
         docker_client = docker.from_env(timeout=240)
+        node_doc = firestore.Client(project=PROJECT_ID).collection("nodes").document(INSTANCE_NAME)
+        node_doc.update(
+            {
+                "status": "BOOTING",
+                "current_job": None,
+                "parallelism": None,
+                "target_parallelism": None,
+            }
+        )
 
         # ignore `main_service` container so that in local testing I can use the `main_service`
         # container while I am running the `node_service` tests.
