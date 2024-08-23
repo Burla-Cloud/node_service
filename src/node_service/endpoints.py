@@ -102,16 +102,15 @@ def execute(
         print(f"correct_python_version: {correct_python_version}")
         print(f"correct_pv and need_more_p: {correct_python_version and need_more_parallelism}")
         print(f"subjob_executor.python_version: {subjob_executor.python_version}")
-        print(f"subjob_executor.python_version: {subjob_executor.python_version}")
         print(f"job env python: {job['env']['python_version']}")
         print(f"request json parallelism: {request_json['parallelism']}")
 
         if correct_python_version and need_more_parallelism:
-            print("ADDING EXECUTOR")
+            print("ADDING EXECUTOR-----------------------------------------------")
             executors_to_keep.append(subjob_executor)
             future_parallelism += 1
         else:
-            print("REMOVING EXECUTOR")
+            print("REMOVING EXECUTOR-------------------------------------------------")
             executors_to_remove.append(subjob_executor)
 
     # call executors concurrently
@@ -126,17 +125,14 @@ def execute(
 
     begin_executing = time()
     asyncio.run(request_executions(executors_to_keep))
-    job_ref.update(
-        {"benchmark.done_begin_executing": time(), "benchmark.begin_executing": begin_executing}
-    )
+    node_doc.update({"parallelism": len(executors_to_keep)})
+    job_ref.update({"benchmark.done_begin_exe": time(), "benchmark.begin_exe": begin_executing})
 
     if not executors_to_keep:
         raise Exception("No qualified subjob executors?")
 
     SELF["subjob_executors"] = executors_to_keep
     _remove_subjob_executors_async(executors_to_remove, background_tasks, logger)
-
-    return "Success"
 
 
 # TODO: should take in num container sets to start.

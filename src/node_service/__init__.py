@@ -5,11 +5,10 @@ import traceback
 from uuid import uuid4
 from time import time
 
-from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, Depends
+from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import Response
 from starlette.datastructures import UploadFile
 from google.cloud import logging
-from google.cloud import firestore
 
 
 __version__ = "v0.1.37"

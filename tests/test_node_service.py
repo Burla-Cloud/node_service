@@ -175,7 +175,7 @@ def _assert_node_service_left_proper_containers_running():
             assert response.json()["status"] == "READY"
 
         # correct num containers ?
-        machine_type = "n1-standard-96"
+        machine_type = "n4-standard-2"
         for node in config["Nodes"]:
             if node["machine_type"] == machine_type:
                 break
