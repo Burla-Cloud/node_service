@@ -137,14 +137,7 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
-        add_background_task(
-            response.add_background_task,
-            logger,
-            logger.log,
-            str(e),
-            "ERROR",
-            traceback=traceback_str,
-        )
+        add_background_task(logger.log, str(e), "ERROR", traceback=traceback_str)
 
     response_contains_background_tasks = getattr(response, "background") is not None
     if not response_contains_background_tasks:
@@ -153,11 +146,11 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
     if not IN_DEV:
         add_background_task = get_add_background_task_function(response.background, logger=logger)
         msg = f"Received {request.method} at {request.url}"
-        add_background_task(response.background, logger, logger.log, msg)
+        add_background_task(logger.log, msg)
 
         status = response.status_code
         latency = time() - start
         msg = f"{request.method} to {request.url} returned {status} after {latency} seconds."
-        add_background_task(response.background, logger, logger.log, msg, latency=latency)
+        add_background_task(logger.log, msg, latency=latency)
 
     return response
