@@ -102,9 +102,7 @@ def execute(
             tasks = [request_execution(session, f"{e.host}/jobs/{job_id}") for e in executors]
             await asyncio.gather(*tasks)
 
-    begin_executing = time()
     asyncio.run(request_executions(executors_to_keep))
-    job_ref.update({"benchmark.done_begin_exe": time(), "benchmark.begin_exe": begin_executing})
 
     if not executors_to_keep:
         raise Exception("No qualified subjob executors?")
