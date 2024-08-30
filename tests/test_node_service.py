@@ -8,6 +8,7 @@ from time import sleep
 from six import reraise
 from queue import Queue
 from threading import Thread, Event
+from concurrent.futures import ThreadPoolExecutor
 
 import cloudpickle
 import docker
@@ -15,7 +16,6 @@ from tblib import Traceback
 from google.cloud import firestore
 from google.cloud.storage import Client, Blob
 from google.cloud import pubsub
-from google.cloud.pubsub_v1.types import BatchSettings
 
 from env_builder import start_building_environment
 from conftest import CONTAINERS
@@ -90,26 +90,45 @@ def enqueue_outputs_from_stream(
             continue
 
 
-def upload_inputs(inputs: list):
-    batch_settings = BatchSettings(max_bytes=10000000, max_latency=0.01, max_messages=1000)
-    publisher = pubsub.PublisherClient(batch_settings=batch_settings)
+def _upload_input(inputs_collection, input_index, input_):
+    input_pkl = cloudpickle.dumps(input_)
+    input_too_big = len(input_pkl) > 1_048_576
 
-    if not (0 <= len(inputs) <= 4294967295):
-        raise ValueError("too many inputs: ID does not fit in 4 bytes.")
+    if input_too_big:
+        msg = f"Input at index {input_index} is greater than 1MB in size.\n"
+        msg += "Inputs greater than 1MB are unfortunately not yet supported."
+        raise Exception(msg)
+    else:
+        doc = {"input": input_pkl, "claimed": False}
+        inputs_collection.document(str(input_index)).set(doc)
 
-    for input_index, input_ in enumerate(inputs):
-        packed_data = input_index.to_bytes(length=4, byteorder="big") + cloudpickle.dumps(input_)
-        publisher.publish(topic=INPUTS_TOPIC_PATH, data=packed_data)
+
+def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
+    """
+    Uploads inputs into a separate collection not connected to the job
+    so that uploading can start before the job document is created.
+    """
+    inputs_collection = DB.collection("inputs").document(inputs_id).collection("inputs")
+
+    futures = []
+    with ThreadPoolExecutor() as executor:
+        for input_index, input_ in enumerate(inputs):
+            future = executor.submit(_upload_input, inputs_collection, input_index, input_)
+            futures.append(future)
+
+        for future in futures:
+            future.result()  # This will raise exceptions if any occurred in the threads
 
     print("All inputs uploaded.")
 
 
-def _create_job_document_in_database(job_id, image, dependencies):
+def _create_job_document_in_database(job_id, inputs_id, image, dependencies):
     db = firestore.Client(project="burla-test")
     job_ref = db.collection("jobs").document(job_id)
     job_ref.set(
         {
             "test": True,
+            "inputs_id": inputs_id,
             "function_uri": f"gs://burla-jobs/12345/{job_id}/function.pkl",
             "env": {
                 "is_copied_from_client": bool(dependencies),
@@ -190,23 +209,29 @@ def _assert_node_service_left_proper_containers_running():
 def _execute_job(
     node_svc_hostname, my_function, my_inputs, my_packages, my_image, send_inputs_through_gcs=False
 ):
+    db = firestore.Client()
     JOB_ID = str(uuid4()) + "-test"
+    INPUTS_ID = str(uuid4()) + "-test"
     DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest"
     image = my_image if my_image else DEFAULT_IMAGE
+
+    # in separate thread start uploading inputs:
+    input_uploader_thread = Thread(
+        target=upload_inputs,
+        args=(db, INPUTS_ID, my_inputs),
+        daemon=True,
+    )
+    input_uploader_thread.start()
 
     if send_inputs_through_gcs:
         _upload_function_to_gcs(JOB_ID, my_function)
         _upload_inputs_to_gcs(JOB_ID, my_inputs)
-        _create_job_document_in_database(JOB_ID, image, my_packages)
+        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages)
     else:
-        _create_job_document_in_database(JOB_ID, image, my_packages)
+        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages)
 
     if my_packages:
         start_building_environment(JOB_ID, image=my_image if my_image else DEFAULT_IMAGE)
-
-    # in separate thread start uploading inputs:
-    input_uploader_thread = Thread(target=upload_inputs, args=(my_inputs,), daemon=True)
-    input_uploader_thread.start()
 
     # request job execution
     if send_inputs_through_gcs:
@@ -279,7 +304,7 @@ def test_version(hostname):
 def test_everything_simple(hostname):
     """this is an e2e integration test that relies on live infrastructure"""
     my_image = None
-    my_inputs = ["hi", "hi"]
+    my_inputs = list(range(100))  # ["hi", "hi"]
     my_packages = []
 
     def my_function(my_input):
@@ -287,7 +312,7 @@ def test_everything_simple(hostname):
 
     return_values = _execute_job(hostname, my_function, my_inputs, my_packages, my_image)
 
-    assert return_values == ["hihi", "hihi"]
+    assert return_values == [my_function(input_) for input_ in my_inputs]
     # _wait_until_node_svc_not_busy(hostname)
     # _assert_node_service_left_proper_containers_running()
 
