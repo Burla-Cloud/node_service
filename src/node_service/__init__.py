@@ -4,12 +4,12 @@ import json
 import traceback
 from uuid import uuid4
 from time import time
+from typing import Callable
 
-from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, Depends
+from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.datastructures import UploadFile
 from google.cloud import logging
-from google.cloud import firestore
 
 
 __version__ = "v0.1.37"
@@ -33,6 +33,8 @@ SELF = {
     "RUNNING": False,
     "FAILED": False,
 }
+
+from node_service.helpers import Logger
 
 
 async def get_request_json(request: Request):
@@ -61,9 +63,30 @@ def get_logger(request: Request):
     return Logger(request=request)
 
 
-from node_service.endpoints import router as endpoints_router
-from node_service.helpers import Logger, add_logged_background_task, format_traceback
+def get_add_background_task_function(
+    background_tasks: BackgroundTasks, logger: Logger = Depends(get_logger)
+):
+    def add_logged_background_task(func: Callable, *a, **kw):
+        tb_details = traceback.format_list(traceback.extract_stack()[:-1])
+        parent_traceback = "Traceback (most recent call last):\n" + format_traceback(tb_details)
 
+        def func_logged(*a, **kw):
+            try:
+                return func(*a, **kw)
+            except Exception as e:
+                exc_type, exc_value, exc_traceback = sys.exc_info()
+                tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+                local_traceback_no_title = "\n".join(format_traceback(tb_details).split("\n")[1:])
+                traceback_str = parent_traceback + local_traceback_no_title
+                logger.log(message=str(e), severity="ERROR", traceback=traceback_str)
+
+        background_tasks.add_task(func_logged, *a, **kw)
+
+    return add_logged_background_task
+
+
+from node_service.helpers import Logger, format_traceback
+from node_service.endpoints import router as endpoints_router
 
 app = FastAPI(docs_url=None, redoc_url=None)
 app.include_router(endpoints_router)
@@ -109,25 +132,25 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         # create new response object to return gracefully.
         response = Response(status_code=500, content="Internal server error.")
         response.background = BackgroundTasks()
+        add_background_task = get_add_background_task_function(response.background, logger=logger)
 
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)
-        add_logged_background_task(
-            response.background, logger, logger.log, str(e), "ERROR", traceback=traceback_str
-        )
+        add_background_task(logger.log, str(e), "ERROR", traceback=traceback_str)
 
     response_contains_background_tasks = getattr(response, "background") is not None
     if not response_contains_background_tasks:
         response.background = BackgroundTasks()
 
     if not IN_DEV:
+        add_background_task = get_add_background_task_function(response.background, logger=logger)
         msg = f"Received {request.method} at {request.url}"
-        add_logged_background_task(response.background, logger, logger.log, msg)
+        add_background_task(logger.log, msg)
 
         status = response.status_code
         latency = time() - start
         msg = f"{request.method} to {request.url} returned {status} after {latency} seconds."
-        add_logged_background_task(response.background, logger, logger.log, msg, latency=latency)
+        add_background_task(logger.log, msg, latency=latency)
 
     return response

@@ -1,21 +1,19 @@
+import os
+from time import sleep
+from uuid import uuid4
 import requests
 import threading
+
 import docker
 import uvicorn
-
-from time import sleep
-
 import pytest
+from google.cloud import firestore
+
 
 PORT = 5000
 HOSTNAME = f"http://127.0.0.1:{PORT}"
 
 CONTAINERS = [
-    {
-        "image": "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest",
-        "python_executable": "/.pyenv/versions/3.9.*/bin/python3.9",
-        "python_version": "3.9",
-    },
     {
         "image": "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest",
         "python_executable": "/.pyenv/versions/3.10.*/bin/python3.10",
@@ -52,7 +50,13 @@ def hostname():
     print("\n")
     delete_containers()
 
-    from node_service import app  # <- standby containers are started when this is loaded.
+    INSTANCE_NAME = "test-node-" + str(uuid4())
+    os.environ["INSTANCE_NAME"] = INSTANCE_NAME
+    db = firestore.Client(project="burla-test")
+    node_doc = db.collection("nodes").document(INSTANCE_NAME)
+    node_doc.set({})
+
+    from node_service import app
 
     server_thread = threading.Thread(target=start_server, args=(app,), daemon=True)
     server_thread.start()
@@ -84,5 +88,6 @@ def hostname():
     print("\nNODE SERVICE STARTED\n")
     yield HOSTNAME
 
+    node_doc.delete()
     # because we're using a daemon thread this will also kill the thread dies safely when
     # the program ends.
