@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import traceback
+import subprocess
 from uuid import uuid4
 from time import time
 from typing import Callable
@@ -15,10 +16,16 @@ from google.cloud import logging
 __version__ = "v0.1.37"
 
 INSTANCE_NAME = os.environ.get("INSTANCE_NAME")
-IN_PRODUCTION = os.environ.get("IN_PRODUCTION") == "True"
 IN_DEV = os.environ.get("IN_DEV") == "True"
-PROJECT_ID = "burla-prod" if IN_PRODUCTION else os.environ.get("BURLA_TEST_PROJECT")
-JOBS_BUCKET = "burla-jobs-prod" if IN_PRODUCTION else os.environ.get("BURLA_TEST_JOBS_BUCKET")
+
+if IN_DEV:
+    cmd = ["gcloud", "config", "get-value", "project"]
+    PROJECT_ID = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
+else:
+    PROJECT_ID = os.environ["PROJECT_ID"]
+
+JOBS_BUCKET = f"burla-jobs--{PROJECT_ID}"
+
 # max num containers is 1024 due to some kind of network/port related limit
 N_CPUS = 1 if IN_DEV else os.cpu_count()  # set IN_DEV in your bashrc
 

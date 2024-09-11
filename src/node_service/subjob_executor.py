@@ -10,7 +10,7 @@ from typing import Optional
 from google.cloud import logging
 import docker
 
-from node_service import IN_PRODUCTION, PROJECT_ID, IN_DEV
+from node_service import PROJECT_ID, IN_DEV
 from node_service.helpers import next_free_port
 
 LOGGER = logging.Client().logger("node_service")
@@ -45,11 +45,7 @@ class SubJobExecutor:
                     command=["/bin/sh", "-c", f"{python_executable} -m {gunicorn_command}"],
                     ports={port: port},
                     volumes=DEVELOPMENT_VOLUMES if IN_DEV else {},
-                    environment={
-                        "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
-                        "IN_PRODUCTION": IN_PRODUCTION,
-                        "IN_DEV": IN_DEV,
-                    },
+                    environment={"PROJECT_ID": PROJECT_ID, "IN_DEV": IN_DEV},
                     detach=True,
                 )
             except docker.errors.APIError as e:
