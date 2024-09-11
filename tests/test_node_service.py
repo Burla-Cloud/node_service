@@ -4,6 +4,7 @@ import json
 import pickle
 import pytest
 import requests
+import subprocess
 from uuid import uuid4
 from time import sleep
 from six import reraise
@@ -18,8 +19,6 @@ from google.cloud import firestore
 from google.cloud.storage import Client, Blob
 from google.cloud import pubsub
 
-from conftest import CONTAINERS
-
 """
 If node_service is imported anywhere here the containers will be started 
 then deleted by `delete_containers` in conftest before testing starts!!
@@ -27,7 +26,8 @@ DO NOT import node_service here.
 """
 
 GCS_CLIENT = Client()
-PROJECT_ID = os.environ.get("BURLA_TEST_PROJECT")
+cmd = ["gcloud", "config", "get-value", "project"]
+PROJECT_ID = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
 INPUTS_TOPIC_PATH = f"projects/{PROJECT_ID}/topics/burla_job_inputs"
 OUTPUTS_SUBSCRIPTION_PATH = f"projects/{PROJECT_ID}/subscriptions/burla_job_outputs"
 LOGS_SUBSCRIPTION_PATH = f"projects/{PROJECT_ID}/subscriptions/burla_job_logs"

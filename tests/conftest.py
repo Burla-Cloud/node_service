@@ -1,4 +1,5 @@
 import os
+import subprocess
 from time import sleep
 from uuid import uuid4
 import requests
@@ -12,7 +13,8 @@ from google.cloud import firestore
 
 PORT = 5000
 HOSTNAME = f"http://127.0.0.1:{PORT}"
-PROJECT_ID = os.environ.get("BURLA_TEST_PROJECT")
+cmd = ["gcloud", "config", "get-value", "project"]
+PROJECT_ID = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
 
 CONTAINERS = [
     {
