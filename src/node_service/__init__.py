@@ -13,8 +13,6 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging
 
 
-__version__ = "v0.1.37"
-
 INSTANCE_NAME = os.environ.get("INSTANCE_NAME")
 IN_DEV = os.environ.get("IN_DEV") == "True"
 
@@ -111,11 +109,6 @@ def get_status():
         return {"status": "RUNNING"}
     else:
         return {"status": "READY"}
-
-
-@app.get("/version")
-def version_endpoint():
-    return {"version": __version__}
 
 
 @app.middleware("http")

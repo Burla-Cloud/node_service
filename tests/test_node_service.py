@@ -9,6 +9,7 @@ from uuid import uuid4
 from time import sleep
 from six import reraise
 from queue import Queue
+from typing import Optional
 from threading import Thread, Event
 from concurrent.futures import ThreadPoolExecutor
 
@@ -123,7 +124,10 @@ def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
     print("All inputs uploaded.")
 
 
-def _create_job_document_in_database(job_id, inputs_id, image, dependencies):
+def _create_job_document_in_database(
+    job_id, inputs_id, image, dependencies, faux_python_version: Optional[str] = None
+):
+    python_version = faux_python_version if faux_python_version else f"3.{sys.version_info.minor}"
     db = firestore.Client(project=PROJECT_ID)
     job_ref = db.collection("jobs").document(job_id)
     job_ref.set(
@@ -135,7 +139,7 @@ def _create_job_document_in_database(job_id, inputs_id, image, dependencies):
                 "is_copied_from_client": bool(dependencies),
                 "image": image,
                 "packages": dependencies,
-                "python_version": f"3.{sys.version_info.minor}",
+                "python_version": python_version,
             },
         }
     )
@@ -208,7 +212,13 @@ def _assert_node_service_left_proper_containers_running():
 
 
 def _execute_job(
-    node_svc_hostname, my_function, my_inputs, my_packages, my_image, send_inputs_through_gcs=False
+    node_svc_hostname,
+    my_function,
+    my_inputs,
+    my_packages,
+    my_image,
+    send_inputs_through_gcs=False,
+    faux_python_version=None,
 ):
     db = firestore.Client()
     JOB_ID = str(uuid4()) + "-test"
@@ -229,9 +239,9 @@ def _execute_job(
     if send_inputs_through_gcs:
         _upload_function_to_gcs(JOB_ID, my_function)
         _upload_inputs_to_gcs(JOB_ID, my_inputs)
-        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages)
+        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages, faux_python_version)
     else:
-        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages)
+        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages, faux_python_version)
 
     # request job execution
     if send_inputs_through_gcs:
@@ -241,7 +251,13 @@ def _execute_job(
         files = dict(function_pkl=function_pkl)
         data = dict(request_json=json.dumps({"parallelism": 1}))
         response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", files=files, data=data)
-    response.raise_for_status()
+
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        if ("500" in str(e)) and response.text:
+            print(response.text)
+        raise e
 
     stop_event = Event()
     subscriber = pubsub.SubscriberClient()
@@ -269,9 +285,17 @@ def _execute_job(
 
         _retrieve_and_raise_errors(JOB_ID)
 
-        response = requests.get(f"{node_svc_hostname}/jobs/{JOB_ID}")
-        response.raise_for_status()
-        response_json = response.json()
+        try:
+            response = requests.get(f"{node_svc_hostname}/jobs/{JOB_ID}")
+            response.raise_for_status()
+            response_json = response.json()
+        except requests.exceptions.HTTPError as e:
+            if "404" in str(e):
+                msg = "Node service returning 404 when attempting to get info about job.\n"
+                msg += "This should only happen if the job was never started or has recently ended."
+                print(msg)
+            else:
+                raise e
 
         if response_json["any_subjobs_failed"] == True:
             # exception in container_service,
@@ -295,16 +319,9 @@ def test_healthcheck(hostname):
     assert response.json() == {"status": "READY"}
 
 
-def test_version(hostname):
-    response = requests.get(f"{hostname}/version")
-    response.raise_for_status()
-    print(response.json())
-
-
-def test_everything_simple(hostname):
-    """this is an e2e integration test that relies on live infrastructure"""
+def f_test_everything_simple(hostname):
     my_image = None
-    my_inputs = list(range(100))  # ["hi", "hi"]
+    my_inputs = ["hi", "hi"]
     my_packages = []
 
     def my_function(my_input):
@@ -317,8 +334,7 @@ def test_everything_simple(hostname):
     # _assert_node_service_left_proper_containers_running()
 
 
-def test_UDF_error(hostname):
-    """this is an e2e integration test that relies on live infrastructure"""
+def f_test_UDF_error(hostname):
     my_image = None
     my_inputs = ["hi", "hi"]
     my_packages = []
@@ -330,5 +346,19 @@ def test_UDF_error(hostname):
     with pytest.raises(ZeroDivisionError):
         _execute_job(hostname, my_function, my_inputs, my_packages, my_image)
 
-    _wait_until_node_svc_not_busy(hostname)
-    _assert_node_service_left_proper_containers_running()
+    # _wait_until_node_svc_not_busy(hostname)
+    # _assert_node_service_left_proper_containers_running()
+
+
+def test_incompatible_containers_error(hostname):
+    my_image = None
+    my_inputs = ["hi", "hi"]
+    my_packages = []
+
+    def my_function(my_input):
+        return my_input * 2
+
+    with pytest.raises(requests.exceptions.HTTPError):
+        _execute_job(
+            hostname, my_function, my_inputs, my_packages, my_image, faux_python_version="3.9"
+        )

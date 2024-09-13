@@ -45,7 +45,11 @@ class SubJobExecutor:
                     command=["/bin/sh", "-c", f"{python_executable} -m {gunicorn_command}"],
                     ports={port: port},
                     volumes=DEVELOPMENT_VOLUMES if IN_DEV else {},
-                    environment={"PROJECT_ID": PROJECT_ID, "IN_DEV": IN_DEV},
+                    environment={
+                        "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
+                        "PROJECT_ID": PROJECT_ID,
+                        "IN_DEV": IN_DEV,
+                    },
                     detach=True,
                 )
             except docker.errors.APIError as e:
