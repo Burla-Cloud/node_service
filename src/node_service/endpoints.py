@@ -10,7 +10,6 @@ import aiohttp
 import docker
 from docker.errors import APIError, NotFound
 from fastapi import APIRouter, Path, HTTPException, Depends, Response
-from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from google.cloud import firestore
 
@@ -103,7 +102,7 @@ def execute(
         msg += "To fix this you can either:\n"
         msg += f" - update the cluster to run containers with python v{user_python_version}\n"
         msg += f" - update your local python version to be one of {cluster_python_versions}"
-        return PlainTextResponse(msg, status_code=500)
+        return Response(status_code=500, content=msg)
 
     # call executors concurrently
     async def request_execution(session, url):
