@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import traceback
+import subprocess
 from uuid import uuid4
 from time import time
 from typing import Callable
@@ -12,13 +13,17 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging
 
 
-__version__ = "v0.1.37"
-
 INSTANCE_NAME = os.environ.get("INSTANCE_NAME")
-IN_PRODUCTION = os.environ.get("IN_PRODUCTION") == "True"
 IN_DEV = os.environ.get("IN_DEV") == "True"
-PROJECT_ID = "burla-prod" if IN_PRODUCTION else "burla-test"
-JOBS_BUCKET = "burla-jobs-prod" if PROJECT_ID == "burla-prod" else "burla-jobs"
+
+if IN_DEV:
+    cmd = ["gcloud", "config", "get-value", "project"]
+    PROJECT_ID = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
+else:
+    PROJECT_ID = os.environ["PROJECT_ID"]
+
+JOBS_BUCKET = f"burla-jobs--{PROJECT_ID}"
+
 # max num containers is 1024 due to some kind of network/port related limit
 N_CPUS = 1 if IN_DEV else os.cpu_count()  # set IN_DEV in your bashrc
 
@@ -104,11 +109,6 @@ def get_status():
         return {"status": "RUNNING"}
     else:
         return {"status": "READY"}
-
-
-@app.get("/version")
-def version_endpoint():
-    return {"version": __version__}
 
 
 @app.middleware("http")

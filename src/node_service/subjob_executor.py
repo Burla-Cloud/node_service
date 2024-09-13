@@ -10,7 +10,7 @@ from typing import Optional
 from google.cloud import logging
 import docker
 
-from node_service import IN_PRODUCTION, PROJECT_ID, IN_DEV
+from node_service import PROJECT_ID, IN_DEV
 from node_service.helpers import next_free_port
 
 LOGGER = logging.Client().logger("node_service")
@@ -47,7 +47,7 @@ class SubJobExecutor:
                     volumes=DEVELOPMENT_VOLUMES if IN_DEV else {},
                     environment={
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
-                        "IN_PRODUCTION": IN_PRODUCTION,
+                        "PROJECT_ID": PROJECT_ID,
                         "IN_DEV": IN_DEV,
                     },
                     detach=True,

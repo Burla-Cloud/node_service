@@ -1,6 +1,5 @@
 import sys
 import requests
-from time import time
 from typing import List
 from threading import Thread
 from typing import Optional, Callable
@@ -10,7 +9,7 @@ import aiohttp
 
 import docker
 from docker.errors import APIError, NotFound
-from fastapi import APIRouter, Path, HTTPException, Depends
+from fastapi import APIRouter, Path, HTTPException, Depends, Response
 from pydantic import BaseModel
 from google.cloud import firestore
 
@@ -82,8 +81,9 @@ def execute(
     executors_to_remove = []
     executors_to_keep = []
     future_parallelism = 0
+    user_python_version = job["env"]["python_version"]
     for subjob_executor in SELF["subjob_executors"]:
-        correct_python_version = subjob_executor.python_version == job["env"]["python_version"]
+        correct_python_version = subjob_executor.python_version == user_python_version
         need_more_parallelism = future_parallelism < request_json["parallelism"]
 
         if correct_python_version and need_more_parallelism:
@@ -91,6 +91,18 @@ def execute(
             future_parallelism += 1
         else:
             executors_to_remove.append(subjob_executor)
+
+    if not executors_to_keep:
+        msg = "No compatible containers.\n"
+        msg += f"User is running python version {user_python_version}, "
+        cluster_python_versions = [e.python_version for e in SELF["subjob_executors"]]
+        cluster_python_versions_msg = ", ".join(cluster_python_versions[:-1])
+        cluster_python_versions_msg += f", and {cluster_python_versions[-1]}"
+        msg += f"containers in the cluster are running: {cluster_python_versions_msg}.\n"
+        msg += "To fix this you can either:\n"
+        msg += f" - update the cluster to run containers with python v{user_python_version}\n"
+        msg += f" - update your local python version to be one of {cluster_python_versions}"
+        return Response(status_code=500, content=msg)
 
     # call executors concurrently
     async def request_execution(session, url):
@@ -103,9 +115,6 @@ def execute(
             await asyncio.gather(*tasks)
 
     asyncio.run(request_executions(executors_to_keep))
-
-    if not executors_to_keep:
-        raise Exception("No qualified subjob executors?")
 
     SELF["subjob_executors"] = executors_to_keep
     remove_executors = lambda executors: [executor.remove() for executor in executors]

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from collections import deque
 
 from fastapi import Request
-from node_service import __version__, IN_DEV, GCL_CLIENT, SELF
+from node_service import IN_DEV, GCL_CLIENT, SELF
 
 
 PRIVATE_PORT_QUEUE = deque(range(32768, 60999))  # <- these ports should be mostly free.

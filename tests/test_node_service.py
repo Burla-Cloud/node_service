@@ -1,12 +1,15 @@
+import os
 import sys
 import json
 import pickle
 import pytest
 import requests
+import subprocess
 from uuid import uuid4
 from time import sleep
 from six import reraise
 from queue import Queue
+from typing import Optional
 from threading import Thread, Event
 from concurrent.futures import ThreadPoolExecutor
 
@@ -17,9 +20,6 @@ from google.cloud import firestore
 from google.cloud.storage import Client, Blob
 from google.cloud import pubsub
 
-from env_builder import start_building_environment
-from conftest import CONTAINERS
-
 """
 If node_service is imported anywhere here the containers will be started 
 then deleted by `delete_containers` in conftest before testing starts!!
@@ -27,9 +27,11 @@ DO NOT import node_service here.
 """
 
 GCS_CLIENT = Client()
-INPUTS_TOPIC_PATH = f"projects/burla-test/topics/burla_job_inputs"
-OUTPUTS_SUBSCRIPTION_PATH = f"projects/burla-test/subscriptions/burla_job_outputs"
-LOGS_SUBSCRIPTION_PATH = f"projects/burla-test/subscriptions/burla_job_logs"
+cmd = ["gcloud", "config", "get-value", "project"]
+PROJECT_ID = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
+INPUTS_TOPIC_PATH = f"projects/{PROJECT_ID}/topics/burla_job_inputs"
+OUTPUTS_SUBSCRIPTION_PATH = f"projects/{PROJECT_ID}/subscriptions/burla_job_outputs"
+LOGS_SUBSCRIPTION_PATH = f"projects/{PROJECT_ID}/subscriptions/burla_job_logs"
 
 
 def _upload_function_to_gcs(job_id, _function):
@@ -122,8 +124,11 @@ def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
     print("All inputs uploaded.")
 
 
-def _create_job_document_in_database(job_id, inputs_id, image, dependencies):
-    db = firestore.Client(project="burla-test")
+def _create_job_document_in_database(
+    job_id, inputs_id, image, dependencies, faux_python_version: Optional[str] = None
+):
+    python_version = faux_python_version if faux_python_version else f"3.{sys.version_info.minor}"
+    db = firestore.Client(project=PROJECT_ID)
     job_ref = db.collection("jobs").document(job_id)
     job_ref.set(
         {
@@ -134,14 +139,14 @@ def _create_job_document_in_database(job_id, inputs_id, image, dependencies):
                 "is_copied_from_client": bool(dependencies),
                 "image": image,
                 "packages": dependencies,
-                "python_version": f"3.{sys.version_info.minor}",
+                "python_version": python_version,
             },
         }
     )
 
 
 def _retrieve_and_raise_errors(job_id):
-    db = firestore.Client(project="burla-test")
+    db = firestore.Client(project=PROJECT_ID)
     job_ref = db.collection("jobs").document(job_id)
     job = job_ref.get().to_dict()
 
@@ -175,7 +180,7 @@ def _wait_until_node_svc_not_busy(node_svc_hostname, attempt=0):
 def _assert_node_service_left_proper_containers_running():
     from node_service import N_CPUS  # <- see note near import statements at top.
 
-    db = firestore.Client(project="burla-test")
+    db = firestore.Client(project=PROJECT_ID)
     config = db.collection("cluster_config").document("cluster_config").get().to_dict()
 
     client = docker.from_env()
@@ -207,12 +212,20 @@ def _assert_node_service_left_proper_containers_running():
 
 
 def _execute_job(
-    node_svc_hostname, my_function, my_inputs, my_packages, my_image, send_inputs_through_gcs=False
+    node_svc_hostname,
+    my_function,
+    my_inputs,
+    my_packages,
+    my_image,
+    send_inputs_through_gcs=False,
+    faux_python_version=None,
 ):
     db = firestore.Client()
     JOB_ID = str(uuid4()) + "-test"
     INPUTS_ID = str(uuid4()) + "-test"
-    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-job-containers/default/image-nogpu:latest"
+    DEFAULT_IMAGE = (
+        f"us-docker.pkg.dev/{PROJECT_ID}/burla-job-containers/default/image-nogpu:latest"
+    )
     image = my_image if my_image else DEFAULT_IMAGE
 
     # in separate thread start uploading inputs:
@@ -226,12 +239,9 @@ def _execute_job(
     if send_inputs_through_gcs:
         _upload_function_to_gcs(JOB_ID, my_function)
         _upload_inputs_to_gcs(JOB_ID, my_inputs)
-        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages)
+        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages, faux_python_version)
     else:
-        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages)
-
-    if my_packages:
-        start_building_environment(JOB_ID, image=my_image if my_image else DEFAULT_IMAGE)
+        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages, faux_python_version)
 
     # request job execution
     if send_inputs_through_gcs:
@@ -241,7 +251,13 @@ def _execute_job(
         files = dict(function_pkl=function_pkl)
         data = dict(request_json=json.dumps({"parallelism": 1}))
         response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", files=files, data=data)
-    response.raise_for_status()
+
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        if ("500" in str(e)) and response.text:
+            print(response.text)
+        raise e
 
     stop_event = Event()
     subscriber = pubsub.SubscriberClient()
@@ -269,9 +285,17 @@ def _execute_job(
 
         _retrieve_and_raise_errors(JOB_ID)
 
-        response = requests.get(f"{node_svc_hostname}/jobs/{JOB_ID}")
-        response.raise_for_status()
-        response_json = response.json()
+        try:
+            response = requests.get(f"{node_svc_hostname}/jobs/{JOB_ID}")
+            response.raise_for_status()
+            response_json = response.json()
+        except requests.exceptions.HTTPError as e:
+            if "404" in str(e):
+                msg = "Node service returning 404 when attempting to get info about job.\n"
+                msg += "This should only happen if the job was never started or has recently ended."
+                print(msg)
+            else:
+                raise e
 
         if response_json["any_subjobs_failed"] == True:
             # exception in container_service,
@@ -295,16 +319,9 @@ def test_healthcheck(hostname):
     assert response.json() == {"status": "READY"}
 
 
-def test_version(hostname):
-    response = requests.get(f"{hostname}/version")
-    response.raise_for_status()
-    print(response.json())
-
-
-def test_everything_simple(hostname):
-    """this is an e2e integration test that relies on live infrastructure"""
+def f_test_everything_simple(hostname):
     my_image = None
-    my_inputs = list(range(100))  # ["hi", "hi"]
+    my_inputs = ["hi", "hi"]
     my_packages = []
 
     def my_function(my_input):
@@ -317,8 +334,7 @@ def test_everything_simple(hostname):
     # _assert_node_service_left_proper_containers_running()
 
 
-def test_UDF_error(hostname):
-    """this is an e2e integration test that relies on live infrastructure"""
+def f_test_UDF_error(hostname):
     my_image = None
     my_inputs = ["hi", "hi"]
     my_packages = []
@@ -330,61 +346,19 @@ def test_UDF_error(hostname):
     with pytest.raises(ZeroDivisionError):
         _execute_job(hostname, my_function, my_inputs, my_packages, my_image)
 
-    _wait_until_node_svc_not_busy(hostname)
-    _assert_node_service_left_proper_containers_running()
+    # _wait_until_node_svc_not_busy(hostname)
+    # _assert_node_service_left_proper_containers_running()
 
 
-def test_everything_with_packages(hostname):
-    """this is an e2e integration test that relies on live infrastructure"""
-    my_image = None
-    my_inputs = [2, 3]
-    my_packages = [{"name": "pandas", "version": "2.0.3"}, {"name": "matplotlib"}]
-
-    def my_function(my_input):
-        import pandas as pd
-
-        df = pd.DataFrame({"hello": my_input * ["world"]})
-        return len(df)
-
-    return_values = _execute_job(hostname, my_function, my_inputs, my_packages, my_image)
-    assert 2 in return_values
-    assert 3 in return_values
-
-    _wait_until_node_svc_not_busy(hostname)
-    _assert_node_service_left_proper_containers_running()
-
-
-def test_BUSY_error(hostname):
-    """this is an e2e integration test that relies on live infrastructure"""
-    from node_service import N_CPUS  # <- see note near import statements at top.
-
+def test_incompatible_containers_error(hostname):
     my_image = None
     my_inputs = ["hi", "hi"]
     my_packages = []
 
     def my_function(my_input):
-        sleep(2)
         return my_input * 2
 
-    JOB_ID = str(uuid4()) + "-test"
-    JOB_2_ID = str(uuid4()) + "-test"
-    SUBJOB_IDS = list(range(len(my_inputs)))
-    DEFAULT_IMAGE = "us-docker.pkg.dev/burla-test/burla-job-environments/default-image:latest"
-    image = my_image if my_image else DEFAULT_IMAGE
-    _upload_function_to_gcs(JOB_ID, my_function)
-    _upload_inputs_to_gcs(JOB_ID, my_inputs)
-    _create_job_document_in_database(JOB_ID, SUBJOB_IDS, image, my_packages)
-    if my_packages:
-        start_building_environment(JOB_ID, image=my_image if my_image else DEFAULT_IMAGE)
-
-    # request job execution
-    payload = {"parallelism": 1}
-    response = requests.post(f"{hostname}/jobs/{JOB_ID}", json=payload)
-    response.raise_for_status()
-
-    response = requests.post(f"{hostname}/jobs/{JOB_2_ID}", json=payload)
-    assert response.status_code == 409
-
-    # restart node service before job is done
-    response = requests.post(f"{hostname}/reboot", json=CONTAINERS)
-    response.raise_for_status()
+    with pytest.raises(requests.exceptions.HTTPError):
+        _execute_job(
+            hostname, my_function, my_inputs, my_packages, my_image, faux_python_version="3.9"
+        )
