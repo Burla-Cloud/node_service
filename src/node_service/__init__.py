@@ -13,8 +13,9 @@ from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.datastructures import UploadFile
 from google.cloud import logging
+from google.cloud.compute_v1 import InstancesClient
 
-IDLE_SHUTDOWN_TIMEOUT_SECONDS = 60 * 3
+IDLE_SHUTDOWN_TIMEOUT_SECONDS = 60 * 10
 CURRENT_TIME_UNTIL_SHOTDOWN = IDLE_SHUTDOWN_TIMEOUT_SECONDS
 
 INSTANCE_NAME = os.environ.get("INSTANCE_NAME")
@@ -97,17 +98,33 @@ from node_service.endpoints import router as endpoints_router
 
 
 async def shutdown_if_idle_for_too_long():
+    """FYI: Errors/stdout from this function will be completely hidden!"""
+
     # this is in a for loop so the wait time can be extended while waiting
     for _ in range(CURRENT_TIME_UNTIL_SHOTDOWN):
         await asyncio.sleep(1)
 
-    struct = dict(message=f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}")
-    GCL_CLIENT.log_struct(struct, severity="WARNING")
+    if not IN_DEV:
+        struct = dict(message=f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}")
+        await GCL_CLIENT.log_struct(struct, severity="WARNING")
+
+        instance_client = InstancesClient()
+        silly_response = await instance_client.aggregated_list(project=PROJECT_ID)
+        vms_per_zone = [getattr(vms_in_zone, "instances", []) for _, vms_in_zone in silly_response]
+        vms = [vm for vms_in_zone in vms_per_zone for vm in vms_in_zone]
+        vm = next((vm for vm in vms if vm.name == INSTANCE_NAME), None)
+
+        if vm is None:
+            struct = dict(message=f"INSTANCE NOT FOUND?? UNABLE TO DELETE: {INSTANCE_NAME}")
+            await GCL_CLIENT.log_struct(struct, severity="ERROR")
+        else:
+            zone = vm.zone.split("/")[-1]
+            instance_client.delete(project=PROJECT_ID, zone=zone, instance=INSTANCE_NAME)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    asyncio.create_task(shutdown_if_idle_for_too_long)
+    asyncio.create_task(shutdown_if_idle_for_too_long())
     yield
 
 
