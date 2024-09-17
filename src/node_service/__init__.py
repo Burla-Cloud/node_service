@@ -1,17 +1,21 @@
 import os
 import sys
 import json
+import asyncio
 import traceback
 import subprocess
 from uuid import uuid4
 from time import time
 from typing import Callable
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.datastructures import UploadFile
 from google.cloud import logging
 
+IDLE_SHUTDOWN_TIMEOUT_SECONDS = 60 * 3
+CURRENT_TIME_UNTIL_SHOTDOWN = IDLE_SHUTDOWN_TIMEOUT_SECONDS
 
 INSTANCE_NAME = os.environ.get("INSTANCE_NAME")
 IN_DEV = os.environ.get("IN_DEV") == "True"
@@ -21,13 +25,11 @@ if IN_DEV:
     PROJECT_ID = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
 else:
     PROJECT_ID = os.environ["PROJECT_ID"]
-
 JOBS_BUCKET = f"burla-jobs--{PROJECT_ID}"
 
-# max num containers is 1024 due to some kind of network/port related limit
-N_CPUS = 1 if IN_DEV else os.cpu_count()  # set IN_DEV in your bashrc
-
-GCL_CLIENT = logging.Client().logger("node_service")
+# max num containers is 1024 due to some network/port related limit
+N_CPUS = 1 if IN_DEV else os.cpu_count()
+GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
 SELF = {
     "instance_name": None,
     "most_recent_container_config": [],
@@ -93,7 +95,23 @@ def get_add_background_task_function(
 from node_service.helpers import Logger, format_traceback
 from node_service.endpoints import router as endpoints_router
 
-app = FastAPI(docs_url=None, redoc_url=None)
+
+async def shutdown_if_idle_for_too_long():
+    # this is in a for loop so the wait time can be extended while waiting
+    for _ in range(CURRENT_TIME_UNTIL_SHOTDOWN):
+        await asyncio.sleep(1)
+
+    struct = dict(message=f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}")
+    GCL_CLIENT.log_struct(struct, severity="WARNING")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(shutdown_if_idle_for_too_long)
+    yield
+
+
+app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
 app.include_router(endpoints_router)
 
 
@@ -153,4 +171,6 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         msg = f"{request.method} to {request.url} returned {status} after {latency} seconds."
         add_background_task(logger.log, msg, latency=latency)
 
+    global CURRENT_TIME_UNTIL_SHOTDOWN
+    CURRENT_TIME_UNTIL_SHOTDOWN = IDLE_SHUTDOWN_TIMEOUT_SECONDS
     return response
