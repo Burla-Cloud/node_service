@@ -15,7 +15,7 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging
 from google.cloud.compute_v1 import InstancesClient
 
-IDLE_SHUTDOWN_TIMEOUT_SECONDS = 60 * 3
+IDLE_SHUTDOWN_TIMEOUT_SECONDS = 60 * 30
 CURRENT_TIME_UNTIL_SHOTDOWN = IDLE_SHUTDOWN_TIMEOUT_SECONDS
 
 INSTANCE_NAME = os.environ.get("INSTANCE_NAME")
