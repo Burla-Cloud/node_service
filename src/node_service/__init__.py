@@ -15,8 +15,15 @@ from starlette.datastructures import UploadFile
 from google.cloud import logging
 from google.cloud.compute_v1 import InstancesClient
 
-IDLE_SHUTDOWN_TIMEOUT_SECONDS = 60 * 30
-CURRENT_TIME_UNTIL_SHOTDOWN = IDLE_SHUTDOWN_TIMEOUT_SECONDS
+
+# TODO: make `INACTIVITY_SHUTDOWN_TIME_SEC` a config option in the cluster config
+# to set and retrieve the `inactivity_shutdown_time_sec` in the config I need nodes to know which
+# node type in the config they are an instance of, so they know which `inactivity_shutdown_time_sec`
+# to pull from the cluster config. Therefore I need to give every node type a UID in the database
+# and pass that uid to every node as an env var probablly.
+INACTIVITY_SHUTDOWN_TIME_SEC = 60 * 15
+
+CURRENT_TIME_UNTIL_SHOTDOWN = INACTIVITY_SHUTDOWN_TIME_SEC
 
 INSTANCE_NAME = os.environ.get("INSTANCE_NAME")
 IN_DEV = os.environ.get("IN_DEV") == "True"
@@ -189,5 +196,5 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         add_background_task(logger.log, msg, latency=latency)
 
     global CURRENT_TIME_UNTIL_SHOTDOWN
-    CURRENT_TIME_UNTIL_SHOTDOWN = IDLE_SHUTDOWN_TIMEOUT_SECONDS
+    CURRENT_TIME_UNTIL_SHOTDOWN = INACTIVITY_SHUTDOWN_TIME_SEC
     return response
