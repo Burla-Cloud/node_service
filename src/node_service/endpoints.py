@@ -1,5 +1,6 @@
 import sys
 import requests
+import datetime
 from typing import List
 from threading import Thread
 from typing import Optional, Callable
@@ -7,6 +8,7 @@ import traceback
 import asyncio
 import aiohttp
 
+import pytz
 import docker
 from docker.errors import APIError, NotFound
 from fastapi import APIRouter, Path, HTTPException, Depends, Response
@@ -126,6 +128,7 @@ def execute(
 @router.post("/reboot")
 def reboot_containers(containers: List[Container], logger: Logger = Depends(get_logger)):
     """Kill all containers then start provided containers."""
+    started_booting_at = datetime.now(pytz.timezone("America/New_York"))
 
     # TODO: seems to have like a 1/5 chance (only after running a job) of throwing a:
     # `Unable to reboot, not all containers started!`
@@ -148,6 +151,7 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
                 "current_job": None,
                 "parallelism": None,
                 "target_parallelism": None,
+                "started_booting_at": started_booting_at,
             }
         )
 
