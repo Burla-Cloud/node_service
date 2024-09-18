@@ -1,6 +1,6 @@
 import sys
 import requests
-import datetime
+from datetime import datetime
 from typing import List
 from threading import Thread
 from typing import Optional, Callable
