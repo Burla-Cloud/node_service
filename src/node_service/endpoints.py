@@ -1,5 +1,7 @@
 import sys
 import requests
+from time import sleep
+from datetime import datetime
 from typing import List
 from threading import Thread
 from typing import Optional, Callable
@@ -7,6 +9,7 @@ import traceback
 import asyncio
 import aiohttp
 
+import pytz
 import docker
 from docker.errors import APIError, NotFound
 from fastapi import APIRouter, Path, HTTPException, Depends, Response
@@ -126,6 +129,7 @@ def execute(
 @router.post("/reboot")
 def reboot_containers(containers: List[Container], logger: Logger = Depends(get_logger)):
     """Kill all containers then start provided containers."""
+    started_booting_at = datetime.now(pytz.timezone("America/New_York"))
 
     # TODO: seems to have like a 1/5 chance (only after running a job) of throwing a:
     # `Unable to reboot, not all containers started!`
@@ -148,12 +152,22 @@ def reboot_containers(containers: List[Container], logger: Logger = Depends(get_
                 "current_job": None,
                 "parallelism": None,
                 "target_parallelism": None,
+                "started_booting_at": started_booting_at,
             }
         )
 
+        # for some reason `docker_client.containers.list(all=True)` likes to not work often
+        for attempt in range(10):
+            try:
+                current_containers = docker_client.containers.list(all=True)
+                break
+            except (APIError, NotFound, requests.exceptions.HTTPError) as e:
+                sleep(1)
+                if attempt == 10:
+                    raise e
+
         # ignore `main_service` container so that in local testing I can use the `main_service`
         # container while I am running the `node_service` tests.
-        current_containers = docker_client.containers.list(all=True)
         current_containers = [c for c in current_containers if c.name != "main_service"]
 
         # remove all current containers
