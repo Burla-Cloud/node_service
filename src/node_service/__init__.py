@@ -133,14 +133,14 @@ async def lifespan(app: FastAPI):
     try:
         # boot containers before accepting any requests.
         logger = Logger()
-        await logger.log(f"Starting Workers ...")
+        logger.log(f"Starting Workers ...")
         containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
         await run_in_threadpool(reboot_containers, containers=containers, logger=logger)
-        await logger.log(f"Started {len(SELF['subjob_executors'])} Workers ...")
+        logger.log(f"Started {len(SELF['subjob_executors'])} Workers ...")
 
         if INACTIVITY_SHUTDOWN_TIME_SEC is not None:
             asyncio.create_task(shutdown_if_idle_for_too_long())
-            await logger.log(f"Set to shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC} sec.")
+            logger.log(f"Set to shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC} sec.")
 
     except Exception as e:
         exc_type, exc_value, exc_traceback = sys.exc_info()
