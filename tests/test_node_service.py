@@ -164,7 +164,7 @@ def _wait_until_node_svc_not_busy(node_svc_hostname, attempt=0):
 
 
 def _assert_node_service_left_proper_containers_running():
-    from node_service import N_CPUS  # <- see note near import statements at top.
+    from node_service import INSTANCE_N_CPUS  # <- see note near import statements at top.
 
     db = firestore.Client(project=PROJECT_ID)
     config = db.collection("cluster_config").document("cluster_config").get().to_dict()
@@ -189,7 +189,7 @@ def _assert_node_service_left_proper_containers_running():
         for node in config["Nodes"]:
             if node["machine_type"] == machine_type:
                 break
-        in_standby = len(containers) == len(node["containers"]) * N_CPUS
+        in_standby = len(containers) == len(node["containers"]) * INSTANCE_N_CPUS
 
         sleep(2)
         if attempts == 10:
