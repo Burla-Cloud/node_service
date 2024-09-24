@@ -135,7 +135,7 @@ async def lifespan(app: FastAPI):
         logger = Logger()
         logger.log(f"Starting Workers ...")
         containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
-        await run_in_threadpool(reboot_containers, containers=containers, logger=logger)
+        await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
         logger.log(f"Started {len(SELF['subjob_executors'])} Workers ...")
 
         if INACTIVITY_SHUTDOWN_TIME_SEC is not None:
