@@ -10,7 +10,7 @@ import aiohttp
 
 import docker
 from docker.errors import APIError, NotFound
-from fastapi import APIRouter, Path, HTTPException, Depends, Response
+from fastapi import APIRouter, Path, Depends, Response
 from google.cloud import firestore
 
 from node_service import (
@@ -57,7 +57,7 @@ def get_job_status(
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
     if not job_id == SELF["current_job"]:
-        raise HTTPException(404)
+        return Response("job not found", status_code=404)
 
     workers_status = [worker.status() for worker in SELF["workers"]]
     any_failed = any([status == "FAILED" for status in workers_status])
@@ -81,7 +81,7 @@ def execute(
     add_background_task: Callable = Depends(get_add_background_task_function),
 ):
     if SELF["RUNNING"]:
-        raise HTTPException(409, detail=f"Node in state `RUNNING`, unable to satisfy request")
+        return Response(f"Node in state `RUNNING`, unable to satisfy request", status_code=409)
 
     SELF["current_job"] = job_id
     SELF["RUNNING"] = True
@@ -122,7 +122,7 @@ def execute(
         msg += "To fix this you can either:\n"
         msg += f" - update the cluster to run containers with python v{user_python_version}\n"
         msg += f" - update your local python version to be one of {cluster_python_versions}"
-        raise HTTPException(500, detail=msg)
+        raise Response(msg, status_code=409)
 
     # call workers concurrently
     async def assign_worker(session, url):
@@ -159,7 +159,7 @@ def reboot_containers(
     # This only happens with a high number of containers.
 
     if SELF["BOOTING"]:
-        raise HTTPException(409, detail="Node already BOOTING, unable to satisfy request.")
+        return Response("Node already BOOTING, unable to satisfy request.", status_code=409)
 
     try:
         SELF["RUNNING"] = False

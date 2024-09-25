@@ -197,6 +197,10 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         traceback_str = format_traceback(tb_details)
         add_background_task(logger.log, str(e), "ERROR", traceback=traceback_str)
 
+    if response.status_code != 200:
+        msg = f"non-200 status response: {response.status_code}: {response.text}"
+        add_background_task(logger.log, str(e), "WARNING")
+
     response_contains_background_tasks = getattr(response, "background") is not None
     if not response_contains_background_tasks:
         response.background = BackgroundTasks()
