@@ -122,6 +122,7 @@ def execute(
         msg += "To fix this you can either:\n"
         msg += f" - update the cluster to run containers with python v{user_python_version}\n"
         msg += f" - update your local python version to be one of {cluster_python_versions}"
+        print(msg)
         return Response(msg, status_code=409)
 
     # call workers concurrently
