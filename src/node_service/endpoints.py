@@ -30,6 +30,27 @@ from node_service.worker import Worker
 router = APIRouter()
 
 
+def watch_job(job_id: str):
+    """Runs in an independent thread, restarts node when all workers are done."""
+    logger = Logger()
+    try:
+        while True:
+            sleep(2)
+            workers_status = [worker.status() for worker in SELF["workers"]]
+            any_failed = any([status == "FAILED" for status in workers_status])
+            all_done = all([status == "DONE" for status in workers_status])
+            if all_done or any_failed:
+                break
+
+        if not SELF["BOOTING"]:
+            reboot_containers(logger=logger)
+    except Exception as e:
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        traceback_str = format_traceback(tb_details)
+        logger.log(str(e), "ERROR", traceback=traceback_str)
+
+
 @router.get("/jobs/{job_id}")
 def get_job_status(
     job_id: str = Path(...),
@@ -69,17 +90,7 @@ def execute(
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update({"status": "RUNNING", "current_job": job_id})
 
-    def watch_job(job_id: str):
-        while True:
-            sleep(2)
-            workers_status = [worker.status() for worker in SELF["workers"]]
-            any_failed = any([status == "FAILED" for status in workers_status])
-            all_done = all([status == "DONE" for status in workers_status])
-            if all_done or any_failed:
-                break
-        reboot_containers(logger=logger)
-
-    job_watcher_thread = Thread(target=watch_job, args=(job_id,), daemon=True)
+    job_watcher_thread = Thread(target=watch_job, args=(job_id,))
     job_watcher_thread.start()
     SELF["job_watcher_thread"] = job_watcher_thread
 

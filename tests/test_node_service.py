@@ -99,7 +99,7 @@ def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
     inputs_collection = DB.collection("inputs").document(inputs_id).collection("inputs")
 
     futures = []
-    with ThreadPoolExecutor() as executor:
+    with ThreadPoolExecutor(max_workers=32) as executor:
         for input_index, input_ in enumerate(inputs):
             future = executor.submit(_upload_input, inputs_collection, input_index, input_)
             futures.append(future)
