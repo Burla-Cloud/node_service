@@ -70,7 +70,7 @@ def hostname():
     server_thread.start()
     sleep(3)
 
-    # Wait until node service has started all subjob_executors
+    # Wait until node service has started all workers
     attempt = 0
     while True:
         try:

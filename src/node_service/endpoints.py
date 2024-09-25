@@ -1,7 +1,6 @@
 import sys
-import json
 import requests
-from time import time
+from time import time, sleep
 from typing import List
 from threading import Thread
 from typing import Optional, Callable
@@ -26,7 +25,7 @@ from node_service import (
     Container,
 )
 from node_service.helpers import Logger, format_traceback, list_all_local_containers
-from node_service.subjob_executor import SubJobExecutor
+from node_service.worker import Worker
 
 router = APIRouter()
 
@@ -39,9 +38,9 @@ def get_job_status(
     if not job_id == SELF["current_job"]:
         raise HTTPException(404)
 
-    executors_status = [executor.status() for executor in SELF["subjob_executors"]]
-    any_failed = any([status == "FAILED" for status in executors_status])
-    all_done = all([status == "DONE" for status in executors_status])
+    workers_status = [worker.status() for worker in SELF["workers"]]
+    any_failed = any([status == "FAILED" for status in workers_status])
+    all_done = all([status == "DONE" for status in workers_status])
 
     if all_done or any_failed:
         previous_containers = SELF["current_container_config"]
@@ -70,28 +69,42 @@ def execute(
     node_doc = db.collection("nodes").document(INSTANCE_NAME)
     node_doc.update({"status": "RUNNING", "current_job": job_id})
 
+    def watch_job(job_id: str):
+        while True:
+            sleep(2)
+            workers_status = [worker.status() for worker in SELF["workers"]]
+            any_failed = any([status == "FAILED" for status in workers_status])
+            all_done = all([status == "DONE" for status in workers_status])
+            if all_done or any_failed:
+                break
+        reboot_containers(logger=logger)
+
+    job_watcher_thread = Thread(target=watch_job, args=(job_id,), daemon=True)
+    job_watcher_thread.start()
+    SELF["job_watcher_thread"] = job_watcher_thread
+
     job_ref = db.collection("jobs").document(job_id)
     job = job_ref.get().to_dict()
 
-    # determine which executors to call and which to remove
-    executors_to_remove = []
-    executors_to_keep = []
+    # determine which workers to call and which to remove
+    workers_to_remove = []
+    workers_to_keep = []
     future_parallelism = 0
     user_python_version = job["env"]["python_version"]
-    for subjob_executor in SELF["subjob_executors"]:
-        correct_python_version = subjob_executor.python_version == user_python_version
+    for worker in SELF["workers"]:
+        correct_python_version = worker.python_version == user_python_version
         need_more_parallelism = future_parallelism < request_json["parallelism"]
 
         if correct_python_version and need_more_parallelism:
-            executors_to_keep.append(subjob_executor)
+            workers_to_keep.append(worker)
             future_parallelism += 1
         else:
-            executors_to_remove.append(subjob_executor)
+            workers_to_remove.append(worker)
 
-    if not executors_to_keep:
+    if not workers_to_keep:
         msg = "No compatible containers.\n"
         msg += f"User is running python version {user_python_version}, "
-        cluster_python_versions = [e.python_version for e in SELF["subjob_executors"]]
+        cluster_python_versions = [e.python_version for e in SELF["workers"]]
         cluster_python_versions_msg = ", ".join(cluster_python_versions[:-1])
         cluster_python_versions_msg += f", and {cluster_python_versions[-1]}"
         msg += f"containers in the cluster are running: {cluster_python_versions_msg}.\n"
@@ -100,21 +113,21 @@ def execute(
         msg += f" - update your local python version to be one of {cluster_python_versions}"
         return Response(status_code=500, content=msg)
 
-    # call executors concurrently
-    async def request_execution(session, url):
+    # call workers concurrently
+    async def assign_worker(session, url):
         async with session.post(url, data={"function_pkl": function_pkl}) as response:
             response.raise_for_status()
 
-    async def request_executions(executors):
+    async def assign_workers(workers):
         async with aiohttp.ClientSession() as session:
-            tasks = [request_execution(session, f"{e.host}/jobs/{job_id}") for e in executors]
+            tasks = [assign_worker(session, f"{e.host}/jobs/{job_id}") for e in workers]
             await asyncio.gather(*tasks)
 
-    asyncio.run(request_executions(executors_to_keep))
+    asyncio.run(assign_workers(workers_to_keep))
 
-    SELF["subjob_executors"] = executors_to_keep
-    remove_executors = lambda executors: [executor.remove() for executor in executors]
-    add_background_task(remove_executors, executors_to_remove)
+    SELF["workers"] = workers_to_keep
+    remove_workers = lambda workers: [worker.remove() for worker in workers]
+    add_background_task(remove_workers, workers_to_remove)
     add_background_task(logger.log, f"Started executing job at parallelism: {future_parallelism}")
 
 
@@ -140,7 +153,7 @@ def reboot_containers(
     try:
         SELF["RUNNING"] = False
         SELF["BOOTING"] = True
-        SELF["subjob_executors"] = []
+        SELF["workers"] = []
         if new_container_config:
             SELF["current_container_config"] = new_container_config
 
@@ -165,11 +178,11 @@ def reboot_containers(
                 if not (("409" in str(e)) or ("404" in str(e))):
                     raise e
 
-        def create_subjob_executor(*a, **kw):
+        def create_worker(*a, **kw):
             # Log error inside thread because sometimes it isn't sent to the main thread, idk why.
             try:
-                subjob_executor = SubJobExecutor(*a, **kw)
-                SELF["subjob_executors"].append(subjob_executor)
+                worker = Worker(*a, **kw)
+                SELF["workers"].append(worker)
             except Exception as e:
                 exc_type, exc_value, exc_traceback = sys.exc_info()
                 tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
@@ -187,7 +200,7 @@ def reboot_containers(
                     container_spec.image,
                     docker_client,
                 )
-                thread = Thread(target=create_subjob_executor, args=args)
+                thread = Thread(target=create_worker, args=args)
                 threads.append(thread)
                 thread.start()
 
@@ -209,6 +222,8 @@ def reboot_containers(
             SELF["BOOTING"] = False
             SELF["current_job"] = None
             node_doc.update({"status": "READY"})
+
+        SELF["job_watcher_thread"] = None
 
     except Exception as e:
         SELF["FAILED"] = True

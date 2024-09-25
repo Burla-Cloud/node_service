@@ -36,7 +36,7 @@ def list_all_local_containers(docker_client: DockerClient):
 def startup_error_msg(container_logs, image):
     return {
         "severity": "ERROR",
-        "message": "subjob_executor timed out.",
+        "message": "worker timed out.",
         "exception": container_logs,
         "job_id": SELF["current_job_id"],
         "image": image,

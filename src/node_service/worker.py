@@ -26,7 +26,7 @@ DEVELOPMENT_VOLUMES = {
 }
 
 
-class SubJobExecutor:
+class Worker:
     """An instance of this = a running container with a running `container_service` instance."""
 
     def __init__(self, python_version: str, python_executable: str, image: str, docker_client):
@@ -107,7 +107,7 @@ class SubJobExecutor:
         self.host = f"http://127.0.0.1:{port}"
 
         if self.status() != "READY":
-            raise Exception("Executor failed to start.")
+            raise Exception("Worker failed to start.")
 
     def exists(self):
         try:
@@ -119,7 +119,7 @@ class SubJobExecutor:
     def logs(self):
         if self.exists():
             return self.container.logs().decode("utf-8")
-        raise Exception("This executor no longer exists.")
+        raise Exception("This worker no longer exists.")
 
     def remove(self):
         if self.exists():
@@ -138,7 +138,7 @@ class SubJobExecutor:
         elif container_is_running:
             response = requests.post(url)
         else:
-            raise Exception("This executor no longer exists.")
+            raise Exception("This worker no longer exists.")
         response.raise_for_status()
 
     def log_debug_info(self):

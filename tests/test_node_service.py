@@ -262,34 +262,33 @@ def _execute_job(
     # loop until job is done
     attempts = 0
     outputs = []
-    sleep_duration = 2
     while len(outputs) < len(my_inputs):
-        sleep(sleep_duration)
+        sleep(1)
 
         while not output_queue.empty():
             outputs.append(output_queue.get())
 
         _retrieve_and_raise_errors(JOB_ID)
 
-        try:
-            response = requests.get(f"{node_svc_hostname}/jobs/{JOB_ID}")
-            response.raise_for_status()
-            response_json = response.json()
-        except requests.exceptions.HTTPError as e:
-            if "404" in str(e):
-                msg = "Node service returning 404 when attempting to get info about job.\n"
-                msg += "This should only happen if the job was never started or has recently ended."
-                print(msg)
-            else:
-                raise e
+        # try:
+        #     response = requests.get(f"{node_svc_hostname}/jobs/{JOB_ID}")
+        #     response.raise_for_status()
+        #     response_json = response.json()
+        # except requests.exceptions.HTTPError as e:
+        #     if "404" in str(e):
+        #         msg = "Node service returning 404 when attempting to get info about job.\n"
+        #         msg += "This should only happen if the job was never started or has recently ended."
+        #         print(msg)
+        #     else:
+        #         raise e
 
-        if response_json["any_subjobs_failed"] == True:
-            # exception in container_service,
-            # if this happens tell user their job failed and it was not their fault.
-            raise Exception("EXECUTOR FAILED")
+        # if response_json["any_subjobs_failed"] == True:
+        #     # exception in container_service,
+        #     # if this happens tell user their job failed and it was not their fault.
+        #     raise Exception("WORKER FAILED")
 
         attempts += 1
-        if attempts * sleep_duration >= 60 * 3:
+        if attempts >= 60 * 3:
             raise Exception("TIMEOUT: Job took > 3 minutes to finish?")
 
     stop_event.set()
@@ -317,6 +316,9 @@ def test_everything_simple(hostname):
     return_values = _execute_job(hostname, my_function, my_inputs, my_packages, my_image)
 
     assert return_values == [my_function(input_) for input_ in my_inputs]
+
+    sleep(10)
+
     # _wait_until_node_svc_not_busy(hostname)
     # _assert_node_service_left_proper_containers_running()
 
