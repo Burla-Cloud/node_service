@@ -25,7 +25,7 @@ if IN_DEV:
 
 PROJECT_ID = os.environ["PROJECT_ID"]
 INSTANCE_NAME = os.environ["INSTANCE_NAME"]
-INACTIVITY_SHUTDOWN_TIME_SEC = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
+INACTIVITY_SHUTDOWN_TIME_SEC = int(os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC"))
 JOBS_BUCKET = f"burla-jobs--{PROJECT_ID}"
 INSTANCE_N_CPUS = 1 if IN_DEV else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
@@ -133,10 +133,10 @@ async def lifespan(app: FastAPI):
     try:
         # boot containers before accepting any requests.
         logger = Logger()
-        logger.log(f"Starting Workers ...")
+        logger.log(f"Starting workers ...")
         containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
         await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
-        logger.log(f"Started {len(SELF['subjob_executors'])} Workers ...")
+        logger.log(f"Started {len(SELF['subjob_executors'])} workers.")
 
         if INACTIVITY_SHUTDOWN_TIME_SEC is not None:
             asyncio.create_task(shutdown_if_idle_for_too_long())
