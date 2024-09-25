@@ -44,10 +44,10 @@ def get_job_status(
     all_done = all([status == "DONE" for status in executors_status])
 
     if all_done or any_failed:
-        previous_containers = SELF["most_recent_container_config"]
+        previous_containers = SELF["current_container_config"]
         SELF["RUNNING"] = False
         if not SELF["BOOTING"]:
-            add_background_task(reboot_containers, previous_containers)
+            add_background_task(reboot_containers, previous_containers, Logger())
 
     return {"all_subjobs_done": all_done, "any_subjobs_failed": any_failed}
 

@@ -36,7 +36,7 @@ SELF = {
     "current_container_config": [],
     "current_time_until_shutdown": INACTIVITY_SHUTDOWN_TIME_SEC,
     "subjob_executors": [],
-    "BOOTING": True,
+    "BOOTING": False,
     "RUNNING": False,
     "FAILED": False,
 }

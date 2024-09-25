@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 from time import sleep
 from uuid import uuid4
@@ -10,6 +11,9 @@ import uvicorn
 import pytest
 from google.cloud import firestore
 
+
+os.environ["GRPC_VERBOSITY"] = "ERROR"
+os.environ["GLOG_minloglevel"] = "2"
 
 PORT = 5000
 HOSTNAME = f"http://127.0.0.1:{PORT}"
@@ -61,6 +65,7 @@ def hostname():
 
     from node_service import app
 
+    os.environ["CONTAINERS"] = json.dumps(CONTAINERS)
     server_thread = threading.Thread(target=start_server, args=(app,), daemon=True)
     server_thread.start()
     sleep(3)
@@ -77,9 +82,6 @@ def hostname():
 
         if status == "FAILED":
             raise Exception("Node service entered state: FAILED")
-        if status == "PLEASE_REBOOT":
-            response = requests.post(f"{HOSTNAME}/reboot", json=CONTAINERS)
-            response.raise_for_status()
         if status == "READY":
             break
 
