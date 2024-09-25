@@ -122,7 +122,7 @@ def execute(
         msg += "To fix this you can either:\n"
         msg += f" - update the cluster to run containers with python v{user_python_version}\n"
         msg += f" - update your local python version to be one of {cluster_python_versions}"
-        return Response(status_code=500, content=msg)
+        raise HTTPException(500, detail=msg)
 
     # call workers concurrently
     async def assign_worker(session, url):
