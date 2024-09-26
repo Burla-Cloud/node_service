@@ -1,5 +1,4 @@
 import os
-import io
 import sys
 import json
 import asyncio
@@ -206,8 +205,12 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         body = b"".join([chunk async for chunk in response.body_iterator])
         response_text = body.decode("utf-8", errors="ignore")
         logger.log(f"non-200 status response: {response.status_code}: {response_text}", "WARNING")
+
         # repair original response before returning (we read/emptied it's body_iterator)
-        response.body_iterator = iter([io.BytesIO(body).read()])
+        async def body_stream():
+            yield body
+
+        response.body_iterator = body_stream()
 
     response_contains_background_tasks = getattr(response, "background") is not None
     if not response_contains_background_tasks:
