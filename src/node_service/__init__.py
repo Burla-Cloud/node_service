@@ -11,7 +11,6 @@ from contextlib import asynccontextmanager
 
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
-from fastapi.responses import StreamingResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.datastructures import UploadFile
@@ -199,7 +198,7 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         add_background_task(logger.log, str(e), "ERROR", traceback=traceback_str)
 
     if response.status_code != 200 and hasattr(response, "body"):
-        response_text = await response.body().decode("utf-8", errors="ignore")
+        response_text = response.body.decode("utf-8", errors="ignore")
         logger.log(f"non-200 status response: {response.status_code}: {response_text}", "WARNING")
     elif response.status_code != 200 and hasattr(response, "body_iterator"):
         body = b"".join([chunk async for chunk in response.body_iterator])

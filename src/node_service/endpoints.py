@@ -82,6 +82,8 @@ def execute(
 ):
     if SELF["RUNNING"]:
         return Response(f"Node in state `RUNNING`, unable to satisfy request", status_code=409)
+    elif request_json["parallelism"] == 0:
+        return Response(f"parallelism must be greater than 0", status_code=400)
 
     SELF["current_job"] = job_id
     SELF["RUNNING"] = True
@@ -126,7 +128,9 @@ def execute(
 
     # call workers concurrently
     async def assign_worker(session, url):
-        async with session.post(url, data={"function_pkl": function_pkl}) as response:
+        starting_index_bytes = request_json["starting_index"].to_bytes()
+        data = {"function_pkl": function_pkl, "starting_index": starting_index_bytes}
+        async with session.post(url, data=data) as response:
             response.raise_for_status()
 
     async def assign_workers(workers):

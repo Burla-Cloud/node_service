@@ -230,12 +230,13 @@ def _execute_job(
         _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages, faux_python_version)
 
     # request job execution
+    payload = {"parallelism": 1, "starting_index": 0}
     if send_inputs_through_gcs:
-        response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", json={"parallelism": 1})
+        response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", json=payload)
     else:
         function_pkl = cloudpickle.dumps(my_function)
         files = dict(function_pkl=function_pkl)
-        data = dict(request_json=json.dumps({"parallelism": 1}))
+        data = dict(request_json=json.dumps(payload))
         response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", files=files, data=data)
 
     try:
@@ -316,8 +317,6 @@ def test_everything_simple(hostname):
     return_values = _execute_job(hostname, my_function, my_inputs, my_packages, my_image)
 
     assert return_values == [my_function(input_) for input_ in my_inputs]
-
-    sleep(10)
 
     # _wait_until_node_svc_not_busy(hostname)
     # _assert_node_service_left_proper_containers_running()
