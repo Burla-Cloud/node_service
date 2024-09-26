@@ -123,12 +123,16 @@ def execute(
         msg += f" - update the cluster to run containers with python v{user_python_version}\n"
         msg += f" - update your local python version to be one of {cluster_python_versions}"
         print(msg)
-        return Response(msg, status_code=409)
+        return Response(content="THIS IS A TEST", status_code=409)
 
     # call workers concurrently
     async def assign_worker(session, url):
         async with session.post(url, data={"function_pkl": function_pkl}) as response:
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except:
+                print("HERE\n\n\n\n\n\n\n\n")
+                raise
 
     async def assign_workers(workers):
         async with aiohttp.ClientSession() as session:
