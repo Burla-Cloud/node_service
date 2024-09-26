@@ -115,7 +115,7 @@ def execute(
     if not workers_to_keep:
         msg = "No compatible containers.\n"
         msg += f"User is running python version {user_python_version}, "
-        cluster_python_versions = [e.python_version for e in SELF["workers"]]
+        cluster_python_versions = list(set([e.python_version for e in SELF["workers"]]))
         cluster_python_versions_msg = ", ".join(cluster_python_versions[:-1])
         cluster_python_versions_msg += f", and {cluster_python_versions[-1]}"
         msg += f"containers in the cluster are running: {cluster_python_versions_msg}.\n"
