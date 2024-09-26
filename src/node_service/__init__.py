@@ -1,4 +1,5 @@
 import os
+import io
 import sys
 import json
 import asyncio
@@ -11,6 +12,7 @@ from contextlib import asynccontextmanager
 
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.datastructures import UploadFile
@@ -201,12 +203,11 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         response_text = await response.body().decode("utf-8", errors="ignore")
         logger.log(f"non-200 status response: {response.status_code}: {response_text}", "WARNING")
     elif response.status_code != 200 and hasattr(response, "body_iterator"):
-        body = b""
-        async for chunk in response.body_iterator:
-            body += chunk
-
+        body = b"".join([chunk async for chunk in response.body_iterator])
         response_text = body.decode("utf-8", errors="ignore")
         logger.log(f"non-200 status response: {response.status_code}: {response_text}", "WARNING")
+        # repair original response before returning (we read/emptied it's body_iterator)
+        response.body_iterator = iter([io.BytesIO(body).read()])
 
     response_contains_background_tasks = getattr(response, "background") is not None
     if not response_contains_background_tasks:
