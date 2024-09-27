@@ -111,7 +111,7 @@ def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
 
 
 def _create_job_document_in_database(
-    job_id, inputs_id, image, dependencies, faux_python_version: Optional[str] = None
+    job_id, inputs_id, image, dependencies, n_inputs, faux_python_version: Optional[str] = None
 ):
     python_version = faux_python_version if faux_python_version else f"3.{sys.version_info.minor}"
     db = firestore.Client(project=PROJECT_ID)
@@ -120,6 +120,8 @@ def _create_job_document_in_database(
         {
             "test": True,
             "inputs_id": inputs_id,
+            "n_sub_jobs": n_inputs,
+            "target_parallelism": 1,
             "function_uri": f"gs://burla-jobs/12345/{job_id}/function.pkl",
             "env": {
                 "is_copied_from_client": bool(dependencies),
@@ -225,9 +227,10 @@ def _execute_job(
     if send_inputs_through_gcs:
         _upload_function_to_gcs(JOB_ID, my_function)
         _upload_inputs_to_gcs(JOB_ID, my_inputs)
-        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages, faux_python_version)
-    else:
-        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages, faux_python_version)
+
+    _create_job_document_in_database(
+        JOB_ID, INPUTS_ID, image, my_packages, len(my_inputs), faux_python_version
+    )
 
     # request job execution
     payload = {"parallelism": 1, "starting_index": 0}

@@ -127,15 +127,18 @@ def execute(
         return Response(msg, status_code=409)
 
     # call workers concurrently
-    async def assign_worker(session, url):
-        starting_index_bytes = request_json["starting_index"].to_bytes()
-        data = {"function_pkl": function_pkl, "starting_index": starting_index_bytes}
+    async def assign_worker(session, url, worker_starting_index):
+        data = {"function_pkl": function_pkl, "starting_index": worker_starting_index.to_bytes()}
         async with session.post(url, data=data) as response:
             response.raise_for_status()
 
     async def assign_workers(workers):
         async with aiohttp.ClientSession() as session:
-            tasks = [assign_worker(session, f"{e.host}/jobs/{job_id}") for e in workers]
+            tasks = []
+            for index, worker in enumerate(workers):
+                url = f"{worker.host}/jobs/{job_id}"
+                worker_starting_index = request_json["starting_index"] + index
+                tasks.append(assign_worker(session, url, worker_starting_index))
             await asyncio.gather(*tasks)
 
     asyncio.run(assign_workers(workers_to_keep))
@@ -143,7 +146,10 @@ def execute(
     SELF["workers"] = workers_to_keep
     remove_workers = lambda workers: [worker.remove() for worker in workers]
     add_background_task(remove_workers, workers_to_remove)
-    add_background_task(logger.log, f"Started executing job at parallelism: {future_parallelism}")
+
+    starting_index = request_json["starting_index"]
+    ending_index = starting_index + len(workers_to_keep)
+    add_background_task(logger.log, f"Assigned inputs: {starting_index} - {ending_index}")
 
 
 @router.post("/reboot")
