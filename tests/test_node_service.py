@@ -120,15 +120,10 @@ def _create_job_document_in_database(
         {
             "test": True,
             "inputs_id": inputs_id,
-            "n_sub_jobs": n_inputs,
+            "n_inputs": n_inputs,
             "target_parallelism": 1,
             "function_uri": f"gs://burla-jobs/12345/{job_id}/function.pkl",
-            "env": {
-                "is_copied_from_client": bool(dependencies),
-                "image": image,
-                "packages": dependencies,
-                "python_version": python_version,
-            },
+            "user_python_version": python_version,
         }
     )
 

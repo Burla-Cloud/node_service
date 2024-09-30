@@ -31,7 +31,7 @@ router = APIRouter()
 
 
 def watch_job(job_id: str):
-    """Runs in an independent thread, restarts node when all workers are done."""
+    """Runs in an independent thread, restarts node when all workers are done or if any failed."""
     logger = Logger()
     try:
         while True:
@@ -52,24 +52,14 @@ def watch_job(job_id: str):
 
 
 @router.get("/jobs/{job_id}")
-def get_job_status(
-    job_id: str = Path(...),
-    add_background_task: Callable = Depends(get_add_background_task_function),
-):
+def get_job_status(job_id: str = Path(...)):
     if not job_id == SELF["current_job"]:
         return Response("job not found", status_code=404)
 
     workers_status = [worker.status() for worker in SELF["workers"]]
     any_failed = any([status == "FAILED" for status in workers_status])
     all_done = all([status == "DONE" for status in workers_status])
-
-    if all_done or any_failed:
-        previous_containers = SELF["current_container_config"]
-        SELF["RUNNING"] = False
-        if not SELF["BOOTING"]:
-            add_background_task(reboot_containers, previous_containers, Logger())
-
-    return {"all_subjobs_done": all_done, "any_subjobs_failed": any_failed}
+    return {"all_workers_done": all_done, "any_workers_failed": any_failed}
 
 
 @router.post("/jobs/{job_id}")
@@ -103,7 +93,7 @@ def execute(
     workers_to_remove = []
     workers_to_keep = []
     future_parallelism = 0
-    user_python_version = job["env"]["python_version"]
+    user_python_version = job["user_python_version"]
     for worker in SELF["workers"]:
         correct_python_version = worker.python_version == user_python_version
         need_more_parallelism = future_parallelism < request_json["parallelism"]
