@@ -91,8 +91,8 @@ def hostname():
             raise Exception("TIMEOUT! Node Service not ready after 20 seconds?")
 
     print("\nNODE SERVICE STARTED\n")
-    yield HOSTNAME
 
-    node_doc.delete()
-    # because we're using a daemon thread this will also kill the thread dies safely when
-    # the program ends.
+    try:
+        yield HOSTNAME
+    finally:
+        node_doc.delete()
