@@ -124,6 +124,9 @@ def execute(
         logger.log(f"Assigning input at index {starting_index}", starting_index=str(starting_index))
         async with session.post(url, data=data) as response:
             response.raise_for_status()
+        logger.log(
+            f"Success assigning input at index {starting_index}", starting_index=str(starting_index)
+        )
         return starting_index
 
     async def assign_workers(workers):
