@@ -121,12 +121,8 @@ def execute(
         byte_length = (starting_index.bit_length() + 7) // 8
         starting_index_bytes = starting_index.to_bytes(byte_length, byteorder="big", signed=False)
         data = {"function_pkl": function_pkl, "starting_index": starting_index_bytes}
-        logger.log(f"Assigning input at index {starting_index}", starting_index=str(starting_index))
         async with session.post(url, data=data) as response:
             response.raise_for_status()
-        logger.log(
-            f"Success assigning input at index {starting_index}", starting_index=str(starting_index)
-        )
         return starting_index
 
     async def assign_workers(workers):
@@ -142,7 +138,7 @@ def execute(
     if not len(assigned_starting_indicies) == len(workers_to_keep):
         desired_starting_indicies = list(range(starting_index, len(workers_to_keep)))
         unassigned_indicies = set(desired_starting_indicies) - set(assigned_starting_indicies)
-        raise Exception(f"failed to assign workers to inputs at indicies {unassigned_indicies}")
+        raise Exception(f"failed to assign workers to inputs at indicies: {unassigned_indicies}")
 
     SELF["workers"] = workers_to_keep
     remove_workers = lambda workers: [worker.remove() for worker in workers]
