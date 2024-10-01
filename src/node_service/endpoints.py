@@ -118,7 +118,14 @@ def execute(
 
     # call workers concurrently
     async def assign_worker(session, url, worker_starting_index):
-        data = {"function_pkl": function_pkl, "starting_index": worker_starting_index.to_bytes()}
+
+        try:
+            start_idx = worker_starting_index.to_bytes()
+        except Exception as e:
+            logger.log(f"ERROR WORKER START INDEX: {worker_starting_index}", severity="ERROR")
+            raise e
+
+        data = {"function_pkl": function_pkl, "starting_index": start_idx}
         async with session.post(url, data=data) as response:
             response.raise_for_status()
 
