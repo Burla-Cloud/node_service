@@ -1,4 +1,5 @@
 import sys
+import pickle
 import requests
 from time import time, sleep
 from typing import List
@@ -118,9 +119,8 @@ def execute(
 
     # call workers concurrently
     async def assign_worker(session, url, starting_index):
-        byte_length = (starting_index.bit_length() + 7) // 8
-        starting_index_bytes = starting_index.to_bytes(byte_length, byteorder="big", signed=False)
-        data = {"function_pkl": function_pkl, "starting_index": starting_index_bytes}
+        request_json = {"inputs_id": job["inputs_id"], "starting_index": starting_index}
+        data = {"function_pkl": function_pkl, "request_json": pickle.dumps(request_json)}
         async with session.post(url, data=data) as response:
             response.raise_for_status()
         return starting_index
