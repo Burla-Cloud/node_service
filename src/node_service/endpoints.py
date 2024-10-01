@@ -121,6 +121,7 @@ def execute(
         byte_length = (starting_index.bit_length() + 7) // 8
         starting_index_bytes = starting_index.to_bytes(byte_length, byteorder="big", signed=False)
         data = {"function_pkl": function_pkl, "starting_index": starting_index_bytes}
+        logger.log(f"Assigning input at index {starting_index}", starting_index=str(starting_index))
         async with session.post(url, data=data) as response:
             response.raise_for_status()
         return starting_index
