@@ -118,7 +118,7 @@ def execute(
 
     # call workers concurrently
     async def assign_worker(session, url, worker_starting_index):
-
+        logger.log(f"worker_starting_index: {worker_starting_index}")
         try:
             start_idx = worker_starting_index.to_bytes()
         except Exception as e:
