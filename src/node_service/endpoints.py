@@ -119,7 +119,11 @@ def execute(
 
     # call workers concurrently
     async def assign_worker(session, url, starting_index):
-        request_json = {"inputs_id": job["inputs_id"], "starting_index": starting_index}
+        request_json = {
+            "inputs_id": job["inputs_id"],
+            "n_inputs": job["n_inputs"],
+            "starting_index": starting_index,
+        }
         data = {"function_pkl": function_pkl, "request_json": pickle.dumps(request_json)}
         async with session.post(url, data=data) as response:
             response.raise_for_status()
