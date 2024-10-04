@@ -46,12 +46,6 @@ def watch_job(job_id: str):
             if all_done or any_failed:
                 break
 
-            if (time() - start) > 5:
-                for worker in SELF["workers"]:
-                    if worker.status() == "RUNNING":
-                        msg = f"WORKER #{worker.id} RUNNING AFTER 4 SEC ??\n"
-                        logger.log(msg, "INFO", container_logs=worker.logs())
-
         if not SELF["BOOTING"]:
             reboot_containers(logger=logger)
     except Exception as e:
