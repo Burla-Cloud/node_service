@@ -101,7 +101,6 @@ class Worker:
             if attempt == 10:
                 raise Exception("Unable to start container.")
 
-        self.subjob_id = None
         self.docker_client = docker_client
         self.python_version = python_version
         self.host = f"http://127.0.0.1:{port}"

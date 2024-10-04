@@ -34,6 +34,9 @@ router = APIRouter()
 def watch_job(job_id: str):
     """Runs in an independent thread, restarts node when all workers are done or if any failed."""
     logger = Logger()
+
+    start = time()
+
     try:
         while True:
             sleep(2)
@@ -42,13 +45,13 @@ def watch_job(job_id: str):
             all_done = all([status == "DONE" for status in workers_status])
             if all_done or any_failed:
                 break
-            else:
-                logger.log(
-                    f"workers_status: {workers_status}",
-                    all_done=all_done,
-                    any_failed=any_failed,
-                    INSTANCE_NAME=INSTANCE_NAME,
-                )
+
+            if (time() - start) > 4:
+                for worker in SELF["workers"]:
+                    if worker.status() == "RUNNING":
+                        msg = f"WORKER STILL RUNNING AFTER 4 SEC ??\n"
+                        msg += worker.logs()
+                        logger.log(msg, "ERROR")
 
         if not SELF["BOOTING"]:
             reboot_containers(logger=logger)
