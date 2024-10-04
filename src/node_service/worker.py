@@ -29,10 +29,18 @@ DEVELOPMENT_VOLUMES = {
 class Worker:
     """An instance of this = a running container with a running `container_service` instance."""
 
-    def __init__(self, python_version: str, python_executable: str, image: str, docker_client):
+    def __init__(
+        self,
+        python_version: str,
+        python_executable: str,
+        image: str,
+        docker_client,
+        id: Optional[int] = None,
+    ):
         self.container = None
         attempt = 0
         docker_client.images.pull(image)
+        self.id = id
 
         while self.container is None:
             port = next_free_port()

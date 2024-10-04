@@ -46,12 +46,11 @@ def watch_job(job_id: str):
             if all_done or any_failed:
                 break
 
-            if (time() - start) > 4:
+            if (time() - start) > 5:
                 for worker in SELF["workers"]:
                     if worker.status() == "RUNNING":
-                        msg = f"WORKER STILL RUNNING AFTER 4 SEC ??\n"
-                        msg += worker.logs()
-                        logger.log(msg, "ERROR")
+                        msg = f"WORKER #{worker.id} RUNNING AFTER 4 SEC ??\n"
+                        logger.log(msg, "INFO", container_logs=worker.logs())
 
         if not SELF["BOOTING"]:
             reboot_containers(logger=logger)
@@ -146,6 +145,7 @@ def execute(
                 url = f"{worker.host}/jobs/{job_id}"
                 worker_starting_index = request_json["starting_index"] + index
                 tasks.append(assign_worker(session, url, worker_starting_index))
+                worker.id = worker_starting_index
             return await asyncio.gather(*tasks)
 
     assigned_starting_indicies = asyncio.run(assign_workers(workers_to_keep))
