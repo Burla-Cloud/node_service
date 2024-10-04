@@ -128,18 +128,6 @@ class Worker:
                 if not "409 Client Error" in str(e):
                     raise e
 
-    def execute(self, job_id: str, function_pkl: Optional[bytes] = None):
-        container_is_running = self.exists()
-        url = f"{self.host}/jobs/{job_id}"
-
-        if container_is_running and function_pkl:
-            response = requests.post(url, files=dict(function_pkl=function_pkl))
-        elif container_is_running:
-            response = requests.post(url)
-        else:
-            raise Exception("This worker no longer exists.")
-        response.raise_for_status()
-
     def log_debug_info(self):
         container_logs = self.logs() if self.exists() else "Unable to retrieve container logs."
         container_logs = f"\nERROR INSIDE CONTAINER:\n{container_logs}\n"
