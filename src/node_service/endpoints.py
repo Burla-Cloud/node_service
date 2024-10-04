@@ -42,6 +42,13 @@ def watch_job(job_id: str):
             all_done = all([status == "DONE" for status in workers_status])
             if all_done or any_failed:
                 break
+            else:
+                logger.log(
+                    f"workers_status: {workers_status}",
+                    all_done=all_done,
+                    any_failed=any_failed,
+                    INSTANCE_NAME=INSTANCE_NAME,
+                )
 
         if not SELF["BOOTING"]:
             reboot_containers(logger=logger)
