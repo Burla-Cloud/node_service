@@ -27,6 +27,7 @@ from node_service import (
 )
 from node_service.helpers import Logger, format_traceback, list_all_local_containers
 from node_service.worker import Worker
+from node_service import ACCESS_TOKEN
 
 router = APIRouter()
 
@@ -126,6 +127,7 @@ def execute(
             "inputs_id": job["inputs_id"],
             "n_inputs": job["n_inputs"],
             "starting_index": starting_index,
+            "sa_access_token": ACCESS_TOKEN,
         }
         data = {"function_pkl": function_pkl, "request_json": pickle.dumps(request_json)}
         async with session.post(url, data=data) as response:

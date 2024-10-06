@@ -4,6 +4,7 @@ import json
 import asyncio
 import traceback
 import subprocess
+import requests
 from uuid import uuid4
 from time import time
 from typing import Callable
@@ -30,6 +31,13 @@ JOBS_BUCKET = f"burla-jobs--{PROJECT_ID}"
 INSTANCE_N_CPUS = 1 if IN_DEV else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
 
+url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+if "test" in INSTANCE_NAME:
+    ACCESS_TOKEN = os.popen("gcloud auth print-access-token").read().strip()
+else:
+    response = requests.get(url, headers={"Metadata-Flavor": "Google"})
+    response.raise_for_status()
+    ACCESS_TOKEN = response.json().get("access_token")
 
 SELF = {
     "workers": [],
