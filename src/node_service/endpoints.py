@@ -127,6 +127,7 @@ def execute(
             "inputs_id": job["inputs_id"],
             "n_inputs": job["n_inputs"],
             "starting_index": starting_index,
+            "planned_future_job_parallelism": job["planned_future_job_parallelism"],
             "sa_access_token": ACCESS_TOKEN,
         }
         data = {"function_pkl": function_pkl, "request_json": pickle.dumps(request_json)}
