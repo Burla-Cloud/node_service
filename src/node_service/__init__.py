@@ -32,7 +32,7 @@ INSTANCE_N_CPUS = 1 if IN_DEV else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
 
 url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
-if "test" in INSTANCE_NAME:
+if IN_DEV:
     ACCESS_TOKEN = os.popen("gcloud auth print-access-token").read().strip()
 else:
     response = requests.get(url, headers={"Metadata-Flavor": "Google"})
@@ -153,6 +153,7 @@ async def lifespan(app: FastAPI):
             logger.log(f"Set to shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC} sec.")
 
     except Exception as e:
+        SELF["FAILED"] = True
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         traceback_str = format_traceback(tb_details)

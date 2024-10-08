@@ -55,6 +55,7 @@ def enqueue_results_from_db(job_doc_ref: DocumentReference, stop_event: Event, q
                 result_doc = change.document.to_dict()
                 result_tuple = (input_index, result_doc["is_error"], result_doc["result_pkl"])
                 queue.put(result_tuple)
+                print(f"Got result #{input_index}")
 
     collection_ref = job_doc_ref.collection("results")
     query_watch = collection_ref.on_snapshot(on_snapshot)
@@ -64,36 +65,43 @@ def enqueue_results_from_db(job_doc_ref: DocumentReference, stop_event: Event, q
     query_watch.unsubscribe()
 
 
-def _upload_input(inputs_collection, input_index, input_):
-    input_pkl = cloudpickle.dumps(input_)
-    input_too_big = len(input_pkl) > 1_048_576
-
-    if input_too_big:
-        msg = f"Input at index {input_index} is greater than 1MB in size.\n"
-        msg += "Inputs greater than 1MB are unfortunately not yet supported."
-        raise Exception(msg)
-    else:
-        doc = {"input": input_pkl, "claimed": False}
-        inputs_collection.document(str(input_index)).set(doc)
-
-
 def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
     """
     Uploads inputs into a separate collection not connected to the job
     so that uploading can start before the job document is created.
     """
-    inputs_collection = DB.collection("inputs").document(inputs_id).collection("inputs")
+    batch_size = 100
+    inputs_parent_doc = DB.collection("inputs").document(inputs_id)
 
-    futures = []
-    with ThreadPoolExecutor(max_workers=32) as executor:
-        for input_index, input_ in enumerate(inputs):
-            future = executor.submit(_upload_input, inputs_collection, input_index, input_)
-            futures.append(future)
+    n_docs_in_firestore_batch = 0
+    firestore_batch = DB.batch()
 
-        for future in futures:
-            future.result()  # This will raise exceptions if any occurred in the threads
+    for batch_min_index in range(0, len(inputs), batch_size):
+        batch_max_index = batch_min_index + batch_size
+        input_batch = inputs[batch_min_index:batch_max_index]
+        subcollection = inputs_parent_doc.collection(f"{batch_min_index}-{batch_max_index}")
 
-    print("All inputs uploaded.")
+        for local_input_index, input_ in enumerate(input_batch):
+            input_index = local_input_index + batch_min_index
+            input_pkl = cloudpickle.dumps(input_)
+            input_too_big = len(input_pkl) > 1_048_376  # 1MB size limit
+
+            if input_too_big:
+                msg = f"Input at index {input_index} is greater than 1MB in size.\n"
+                msg += "Inputs greater than 1MB are unfortunately not yet supported."
+                raise Exception(msg)
+            else:
+                doc_ref = subcollection.document(str(input_index))
+                firestore_batch.set(doc_ref, {"input": input_pkl, "claimed": False})
+                n_docs_in_firestore_batch += 1
+
+            # max num documents per firestore batch is 500, push batch when this is reached.
+            if n_docs_in_firestore_batch >= 500:
+                firestore_batch.commit()
+                firestore_batch = DB.batch()
+                n_docs_in_firestore_batch = 0
+
+    firestore_batch.commit()
 
 
 def periodiocally_healthcheck_job(
@@ -109,7 +117,12 @@ def periodiocally_healthcheck_job(
             stop_event.wait(healthcheck_frequency_sec)
             continue
 
-        error_event.set()
+        if response.status_code == 404:
+            # this thread often runs for a bit after the job has ended, causing 404s
+            # for now, just ignore these.
+            pass
+        else:
+            error_event.set()
         return
 
 
@@ -239,7 +252,7 @@ def _execute_job(
 
     # Run periodic healthchecks on the job/cluster from a separate thread.
     error_event = Event()
-    healthcheck_freq_sec = 2
+    healthcheck_freq_sec = 5
     args = (JOB_ID, healthcheck_freq_sec, node_svc_hostname, stop_event, error_event)
     healthchecker_thread = Thread(target=periodiocally_healthcheck_job, args=args, daemon=True)
     healthchecker_thread.start()
@@ -279,7 +292,7 @@ def test_healthcheck(hostname):
 
 def test_everything_simple(hostname):
     my_image = None
-    my_inputs = ["hi", "hi"]
+    my_inputs = list(range(10))
     my_packages = []
 
     def my_function(my_input):

@@ -146,6 +146,9 @@ def execute(
             return await asyncio.gather(*tasks)
 
     assigned_starting_indicies = asyncio.run(assign_workers(workers_to_keep))
+
+    print(f"Assigned starting indicies: {assigned_starting_indicies}")
+
     if not len(assigned_starting_indicies) == len(workers_to_keep):
         desired_starting_indicies = list(range(starting_index, len(workers_to_keep)))
         unassigned_indicies = set(desired_starting_indicies) - set(assigned_starting_indicies)
