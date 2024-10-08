@@ -301,7 +301,12 @@ def test_everything_simple(hostname):
 
     return_values = _execute_job(hostname, my_function, my_inputs, my_packages, my_image)
 
-    assert return_values == [my_function(input_) for input_ in my_inputs]
+    # collect expected returns with no stdout
+    sys.stdout = open(os.devnull, "w")
+    expected_return_values = [my_function(input_) for input_ in my_inputs]
+    sys.stdout = sys.__stdout__
+
+    assert return_values == expected_return_values
 
     # _wait_until_node_svc_not_busy(hostname)
     # _assert_node_service_left_proper_containers_running()
