@@ -1,9 +1,14 @@
 import sys
 import socket
+import requests
+from time import sleep
 from itertools import groupby
+from typing import Optional
 from datetime import datetime, timedelta, timezone
 
 from collections import deque
+from docker import DockerClient
+from docker.errors import APIError, NotFound
 
 from fastapi import Request
 from node_service import IN_DEV, GCL_CLIENT, SELF
@@ -12,10 +17,26 @@ from node_service import IN_DEV, GCL_CLIENT, SELF
 PRIVATE_PORT_QUEUE = deque(range(32768, 60999))  # <- these ports should be mostly free.
 
 
+def list_all_local_containers(docker_client: DockerClient):
+    # for some reason `docker_client.containers.list(all=True)` likes to frequently not work
+    for attempt in range(10):
+        try:
+            current_containers = docker_client.containers.list(all=True)
+            break
+        except (APIError, NotFound, requests.exceptions.HTTPError) as e:
+            sleep(1)
+            if attempt == 10:
+                raise e
+
+    # ignore `main_service` container so that I can run both the `main_service` and
+    # `node_service` locally at the same time during testing.
+    return [c for c in current_containers if c.name != "main_service"]
+
+
 def startup_error_msg(container_logs, image):
     return {
         "severity": "ERROR",
-        "message": "subjob_executor timed out.",
+        "message": "worker timed out.",
         "exception": container_logs,
         "job_id": SELF["current_job_id"],
         "image": image,
@@ -44,8 +65,8 @@ def format_traceback(traceback_details: list):
 
 class Logger:
 
-    def __init__(self, request: Request):
-        self.loggable_request = self.__loggable_request(request)
+    def __init__(self, request: Optional[Request] = None):
+        self.loggable_request = self.__loggable_request(request) if request else {}
 
     def __make_serializeable(self, obj):
         """

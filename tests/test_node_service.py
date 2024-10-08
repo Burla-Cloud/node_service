@@ -31,22 +31,6 @@ cmd = ["gcloud", "config", "get-value", "project"]
 PROJECT_ID = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
 
 
-def _upload_function_to_gcs(job_id, _function):
-    pickled_function = cloudpickle.dumps(_function)
-    function_uri = f"gs://burla-jobs/12345/{job_id}/function.pkl"
-    blob = Blob.from_string(function_uri, GCS_CLIENT)
-    blob.upload_from_string(data=pickled_function, content_type="application/octet-stream")
-
-
-def _upload_inputs_to_gcs(job_id, _inputs):
-    subjob_ids = list(range(len(_inputs)))
-    for subjob_id, mock_input in zip(subjob_ids, _inputs):
-        pickled_input = cloudpickle.dumps(mock_input)
-        input_uri = f"gs://burla-jobs/{job_id}/inputs/{subjob_id}.pkl"
-        blob = Blob.from_string(input_uri, GCS_CLIENT)
-        blob.upload_from_string(data=pickled_input, content_type="application/octet-stream")
-
-
 def print_logs_from_db(job_doc_ref: DocumentReference, stop_event: Event):
 
     def on_snapshot(collection_snapshot, changes, read_time):
@@ -62,15 +46,18 @@ def print_logs_from_db(job_doc_ref: DocumentReference, stop_event: Event):
     query_watch.unsubscribe()
 
 
-def enqueue_outputs_from_db(job_doc_ref: DocumentReference, stop_event: Event, output_queue: Queue):
+def enqueue_results_from_db(job_doc_ref: DocumentReference, stop_event: Event, queue: Queue):
 
     def on_snapshot(collection_snapshot, changes, read_time):
         for change in changes:
             if change.type.name == "ADDED":
-                output_pkl = change.document.to_dict()["output"]
-                output_queue.put(cloudpickle.loads(output_pkl))
+                input_index = change.document.id
+                result_doc = change.document.to_dict()
+                result_tuple = (input_index, result_doc["is_error"], result_doc["result_pkl"])
+                queue.put(result_tuple)
+                print(f"Got result #{input_index}")
 
-    collection_ref = job_doc_ref.collection("outputs")
+    collection_ref = job_doc_ref.collection("results")
     query_watch = collection_ref.on_snapshot(on_snapshot)
 
     while not stop_event.is_set():
@@ -78,40 +65,69 @@ def enqueue_outputs_from_db(job_doc_ref: DocumentReference, stop_event: Event, o
     query_watch.unsubscribe()
 
 
-def _upload_input(inputs_collection, input_index, input_):
-    input_pkl = cloudpickle.dumps(input_)
-    input_too_big = len(input_pkl) > 1_048_576
-
-    if input_too_big:
-        msg = f"Input at index {input_index} is greater than 1MB in size.\n"
-        msg += "Inputs greater than 1MB are unfortunately not yet supported."
-        raise Exception(msg)
-    else:
-        doc = {"input": input_pkl, "claimed": False}
-        inputs_collection.document(str(input_index)).set(doc)
-
-
 def upload_inputs(DB: firestore.Client, inputs_id: str, inputs: list):
     """
     Uploads inputs into a separate collection not connected to the job
     so that uploading can start before the job document is created.
     """
-    inputs_collection = DB.collection("inputs").document(inputs_id).collection("inputs")
+    batch_size = 100
+    inputs_parent_doc = DB.collection("inputs").document(inputs_id)
 
-    futures = []
-    with ThreadPoolExecutor() as executor:
-        for input_index, input_ in enumerate(inputs):
-            future = executor.submit(_upload_input, inputs_collection, input_index, input_)
-            futures.append(future)
+    n_docs_in_firestore_batch = 0
+    firestore_batch = DB.batch()
 
-        for future in futures:
-            future.result()  # This will raise exceptions if any occurred in the threads
+    for batch_min_index in range(0, len(inputs), batch_size):
+        batch_max_index = batch_min_index + batch_size
+        input_batch = inputs[batch_min_index:batch_max_index]
+        subcollection = inputs_parent_doc.collection(f"{batch_min_index}-{batch_max_index}")
 
-    print("All inputs uploaded.")
+        for local_input_index, input_ in enumerate(input_batch):
+            input_index = local_input_index + batch_min_index
+            input_pkl = cloudpickle.dumps(input_)
+            input_too_big = len(input_pkl) > 1_048_376  # 1MB size limit
+
+            if input_too_big:
+                msg = f"Input at index {input_index} is greater than 1MB in size.\n"
+                msg += "Inputs greater than 1MB are unfortunately not yet supported."
+                raise Exception(msg)
+            else:
+                doc_ref = subcollection.document(str(input_index))
+                firestore_batch.set(doc_ref, {"input": input_pkl, "claimed": False})
+                n_docs_in_firestore_batch += 1
+
+            # max num documents per firestore batch is 500, push batch when this is reached.
+            if n_docs_in_firestore_batch >= 500:
+                firestore_batch.commit()
+                firestore_batch = DB.batch()
+                n_docs_in_firestore_batch = 0
+
+    firestore_batch.commit()
+
+
+def periodiocally_healthcheck_job(
+    job_id: str,
+    healthcheck_frequency_sec: int,
+    node_svc_hostname: str,
+    stop_event: Event,
+    error_event: Event,
+):
+    while not stop_event.is_set():
+        response = requests.get(f"{node_svc_hostname}/jobs/{job_id}")
+        if response.status_code == 200:
+            stop_event.wait(healthcheck_frequency_sec)
+            continue
+
+        if response.status_code == 404:
+            # this thread often runs for a bit after the job has ended, causing 404s
+            # for now, just ignore these.
+            pass
+        else:
+            error_event.set()
+        return
 
 
 def _create_job_document_in_database(
-    job_id, inputs_id, image, dependencies, faux_python_version: Optional[str] = None
+    job_id, inputs_id, image, dependencies, n_inputs, faux_python_version: Optional[str] = None
 ):
     python_version = faux_python_version if faux_python_version else f"3.{sys.version_info.minor}"
     db = firestore.Client(project=PROJECT_ID)
@@ -120,35 +136,12 @@ def _create_job_document_in_database(
         {
             "test": True,
             "inputs_id": inputs_id,
+            "n_inputs": n_inputs,
+            "planned_future_job_parallelism": 1,
             "function_uri": f"gs://burla-jobs/12345/{job_id}/function.pkl",
-            "env": {
-                "is_copied_from_client": bool(dependencies),
-                "image": image,
-                "packages": dependencies,
-                "python_version": python_version,
-            },
+            "user_python_version": python_version,
         }
     )
-
-
-def _retrieve_and_raise_errors(job_id):
-    db = firestore.Client(project=PROJECT_ID)
-    job_ref = db.collection("jobs").document(job_id)
-    job = job_ref.get().to_dict()
-
-    env_install_error = job["env"].get("install_error")
-    if env_install_error:
-        raise Exception(env_install_error)
-
-    if job.get("udf_errors"):
-        # input_index = job["udf_errors"][0]["input_index"]
-        udf_error = job["udf_errors"][0]["udf_error"]
-        exception_info = pickle.loads(bytes.fromhex(udf_error))
-        reraise(
-            tp=exception_info["exception_type"],
-            value=exception_info["exception"],
-            tb=Traceback.from_dict(exception_info["traceback_dict"]).as_traceback(),
-        )
 
 
 def _wait_until_node_svc_not_busy(node_svc_hostname, attempt=0):
@@ -164,7 +157,7 @@ def _wait_until_node_svc_not_busy(node_svc_hostname, attempt=0):
 
 
 def _assert_node_service_left_proper_containers_running():
-    from node_service import N_CPUS  # <- see note near import statements at top.
+    from node_service import INSTANCE_N_CPUS  # <- see note near import statements at top.
 
     db = firestore.Client(project=PROJECT_ID)
     config = db.collection("cluster_config").document("cluster_config").get().to_dict()
@@ -189,7 +182,7 @@ def _assert_node_service_left_proper_containers_running():
         for node in config["Nodes"]:
             if node["machine_type"] == machine_type:
                 break
-        in_standby = len(containers) == len(node["containers"]) * N_CPUS
+        in_standby = len(containers) == len(node["containers"]) * INSTANCE_N_CPUS
 
         sleep(2)
         if attempts == 10:
@@ -222,20 +215,18 @@ def _execute_job(
     )
     input_uploader_thread.start()
 
-    if send_inputs_through_gcs:
-        _upload_function_to_gcs(JOB_ID, my_function)
-        _upload_inputs_to_gcs(JOB_ID, my_inputs)
-        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages, faux_python_version)
-    else:
-        _create_job_document_in_database(JOB_ID, INPUTS_ID, image, my_packages, faux_python_version)
+    _create_job_document_in_database(
+        JOB_ID, INPUTS_ID, image, my_packages, len(my_inputs), faux_python_version
+    )
 
     # request job execution
+    payload = {"parallelism": 1, "starting_index": 0}
     if send_inputs_through_gcs:
-        response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", json={"parallelism": 1})
+        response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", json=payload)
     else:
         function_pkl = cloudpickle.dumps(my_function)
         files = dict(function_pkl=function_pkl)
-        data = dict(request_json=json.dumps({"parallelism": 1}))
+        data = dict(request_json=json.dumps(payload))
         response = requests.post(f"{node_svc_hostname}/jobs/{JOB_ID}", files=files, data=data)
 
     try:
@@ -254,48 +245,42 @@ def _execute_job(
     log_thread.start()
 
     # Start collecting outputs generated by this job using a separate thread.
-    output_queue = Queue()
-    args = (job_doc_ref, stop_event, output_queue)
-    output_thread = Thread(target=enqueue_outputs_from_db, args=args, daemon=True)
-    output_thread.start()
+    result_queue = Queue()
+    args = (job_doc_ref, stop_event, result_queue)
+    result_thread = Thread(target=enqueue_results_from_db, args=args, daemon=True)
+    result_thread.start()
+
+    # Run periodic healthchecks on the job/cluster from a separate thread.
+    error_event = Event()
+    healthcheck_freq_sec = 5
+    args = (JOB_ID, healthcheck_freq_sec, node_svc_hostname, stop_event, error_event)
+    healthchecker_thread = Thread(target=periodiocally_healthcheck_job, args=args, daemon=True)
+    healthchecker_thread.start()
 
     # loop until job is done
     attempts = 0
     outputs = []
-    sleep_duration = 2
     while len(outputs) < len(my_inputs):
-        sleep(sleep_duration)
+        sleep(1)
 
-        while not output_queue.empty():
-            outputs.append(output_queue.get())
+        if error_event.is_set():
+            raise Exception("Cluster Error. (healthcheck failed)")
 
-        _retrieve_and_raise_errors(JOB_ID)
-
-        try:
-            response = requests.get(f"{node_svc_hostname}/jobs/{JOB_ID}")
-            response.raise_for_status()
-            response_json = response.json()
-        except requests.exceptions.HTTPError as e:
-            if "404" in str(e):
-                msg = "Node service returning 404 when attempting to get info about job.\n"
-                msg += "This should only happen if the job was never started or has recently ended."
-                print(msg)
+        while not result_queue.empty():
+            input_index, is_error, result_pkl = result_queue.get()
+            if is_error:
+                exc_info = pickle.loads(result_pkl)
+                traceback = Traceback.from_dict(exc_info["traceback_dict"]).as_traceback()
+                reraise(tp=exc_info["type"], value=exc_info["exception"], tb=traceback)
             else:
-                raise e
-
-        if response_json["any_subjobs_failed"] == True:
-            # exception in container_service,
-            # if this happens tell user their job failed and it was not their fault.
-            raise Exception("EXECUTOR FAILED")
+                outputs.append(cloudpickle.loads(result_pkl))
 
         attempts += 1
-        if attempts * sleep_duration >= 60 * 3:
+        if attempts >= 60 * 3:
             raise Exception("TIMEOUT: Job took > 3 minutes to finish?")
 
     stop_event.set()
-    log_thread.join()
-    output_thread.join()
-    input_uploader_thread.join()
+    db.collection("jobs").document(JOB_ID).delete()
     return outputs
 
 
@@ -307,7 +292,7 @@ def test_healthcheck(hostname):
 
 def test_everything_simple(hostname):
     my_image = None
-    my_inputs = ["hi", "hi"]
+    my_inputs = list(range(10))
     my_packages = []
 
     def my_function(my_input):
@@ -316,7 +301,13 @@ def test_everything_simple(hostname):
 
     return_values = _execute_job(hostname, my_function, my_inputs, my_packages, my_image)
 
-    assert return_values == [my_function(input_) for input_ in my_inputs]
+    # collect expected returns with no stdout
+    sys.stdout = open(os.devnull, "w")
+    expected_return_values = [my_function(input_) for input_ in my_inputs]
+    sys.stdout = sys.__stdout__
+
+    assert return_values == expected_return_values
+
     # _wait_until_node_svc_not_busy(hostname)
     # _assert_node_service_left_proper_containers_running()
 

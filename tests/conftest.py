@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 from time import sleep
 from uuid import uuid4
@@ -11,27 +12,30 @@ import pytest
 from google.cloud import firestore
 
 
+os.environ["GRPC_VERBOSITY"] = "ERROR"
+os.environ["GLOG_minloglevel"] = "2"
+
 PORT = 5000
 HOSTNAME = f"http://127.0.0.1:{PORT}"
 cmd = ["gcloud", "config", "get-value", "project"]
 PROJECT_ID = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
 
 CONTAINERS = [
-    {
-        "image": f"us-docker.pkg.dev/{PROJECT_ID}/burla-job-containers/default/image-nogpu:latest",
-        "python_executable": "/.pyenv/versions/3.10.*/bin/python3.10",
-        "python_version": "3.10",
-    },
+    # {
+    #     "image": f"us-docker.pkg.dev/{PROJECT_ID}/burla-job-containers/default/image-nogpu:latest",
+    #     "python_executable": "/.pyenv/versions/3.10.*/bin/python3.10",
+    #     "python_version": "3.10",
+    # },
     {
         "image": f"us-docker.pkg.dev/{PROJECT_ID}/burla-job-containers/default/image-nogpu:latest",
         "python_executable": "/.pyenv/versions/3.11.*/bin/python3.11",
         "python_version": "3.11",
     },
-    {
-        "image": f"us-docker.pkg.dev/{PROJECT_ID}/burla-job-containers/default/image-nogpu:latest",
-        "python_executable": "/.pyenv/versions/3.12.*/bin/python3.12",
-        "python_version": "3.12",
-    },
+    # {
+    #     "image": f"us-docker.pkg.dev/{PROJECT_ID}/burla-job-containers/default/image-nogpu:latest",
+    #     "python_executable": "/.pyenv/versions/3.12.*/bin/python3.12",
+    #     "python_version": "3.12",
+    # },
 ]
 
 
@@ -61,11 +65,12 @@ def hostname():
 
     from node_service import app
 
+    os.environ["CONTAINERS"] = json.dumps(CONTAINERS)
     server_thread = threading.Thread(target=start_server, args=(app,), daemon=True)
     server_thread.start()
     sleep(3)
 
-    # Wait until node service has started all subjob_executors
+    # Wait until node service has started all workers
     attempt = 0
     while True:
         try:
@@ -77,20 +82,19 @@ def hostname():
 
         if status == "FAILED":
             raise Exception("Node service entered state: FAILED")
-        if status == "PLEASE_REBOOT":
-            response = requests.post(f"{HOSTNAME}/reboot", json=CONTAINERS)
-            response.raise_for_status()
         if status == "READY":
             break
 
         sleep(2)
         attempt += 1
         if attempt > 10:
-            raise Exception("TIMEOUT! Node Service not ready after 20 seconds?")
+            msg = "TIMEOUT! Node Service not ready after 20 seconds?\n"
+            msg += "(build a new container recently? could just be talking a while to download ...)"
+            raise Exception(msg)
 
     print("\nNODE SERVICE STARTED\n")
-    yield HOSTNAME
 
-    node_doc.delete()
-    # because we're using a daemon thread this will also kill the thread dies safely when
-    # the program ends.
+    try:
+        yield HOSTNAME
+    finally:
+        node_doc.delete()

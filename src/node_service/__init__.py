@@ -4,52 +4,59 @@ import json
 import asyncio
 import traceback
 import subprocess
+import requests
 from uuid import uuid4
 from time import time
 from typing import Callable
 from contextlib import asynccontextmanager
 
+from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request, BackgroundTasks, Depends
 from fastapi.responses import Response
 from starlette.datastructures import UploadFile
 from google.cloud import logging
 from google.cloud.compute_v1 import InstancesClient
 
-
-# TODO: make `INACTIVITY_SHUTDOWN_TIME_SEC` a config option in the cluster config
-# to set and retrieve the `inactivity_shutdown_time_sec` in the config I need nodes to know which
-# node type in the config they are an instance of, so they know which `inactivity_shutdown_time_sec`
-# to pull from the cluster config. Therefore I need to give every node type a UID in the database
-# and pass that uid to every node as an env var probablly.
-INACTIVITY_SHUTDOWN_TIME_SEC = 60 * 15
-
-CURRENT_TIME_UNTIL_SHOTDOWN = INACTIVITY_SHUTDOWN_TIME_SEC
-
-INSTANCE_NAME = os.environ.get("INSTANCE_NAME")
 IN_DEV = os.environ.get("IN_DEV") == "True"
 
 if IN_DEV:
     cmd = ["gcloud", "config", "get-value", "project"]
-    PROJECT_ID = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
-else:
-    PROJECT_ID = os.environ["PROJECT_ID"]
-JOBS_BUCKET = f"burla-jobs--{PROJECT_ID}"
+    os.environ["PROJECT_ID"] = subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
 
-# max num containers is 1024 due to some network/port related limit
-N_CPUS = 1 if IN_DEV else os.cpu_count()
+PROJECT_ID = os.environ["PROJECT_ID"]
+INSTANCE_NAME = os.environ["INSTANCE_NAME"]
+INACTIVITY_SHUTDOWN_TIME_SEC = os.environ.get("INACTIVITY_SHUTDOWN_TIME_SEC")
+JOBS_BUCKET = f"burla-jobs--{PROJECT_ID}"
+INSTANCE_N_CPUS = 1 if IN_DEV else os.cpu_count()
 GCL_CLIENT = logging.Client().logger("node_service", labels=dict(INSTANCE_NAME=INSTANCE_NAME))
+
+url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+if IN_DEV:
+    ACCESS_TOKEN = os.popen("gcloud auth print-access-token").read().strip()
+else:
+    response = requests.get(url, headers={"Metadata-Flavor": "Google"})
+    response.raise_for_status()
+    ACCESS_TOKEN = response.json().get("access_token")
+
 SELF = {
-    "instance_name": None,
-    "most_recent_container_config": [],
-    "subjob_executors": [],
-    "job_id": None,
-    "PLEASE_REBOOT": True,
+    "workers": [],
+    "job_watcher_thread": None,
+    "current_job": None,
+    "current_container_config": [],
+    "current_time_until_shutdown": None,
     "BOOTING": False,
     "RUNNING": False,
     "FAILED": False,
 }
 
 from node_service.helpers import Logger
+
+
+class Container(BaseModel):
+    image: str
+    python_executable: str
+    python_version: str
 
 
 async def get_request_json(request: Request):
@@ -101,14 +108,14 @@ def get_add_background_task_function(
 
 
 from node_service.helpers import Logger, format_traceback
-from node_service.endpoints import router as endpoints_router
+from node_service.endpoints import reboot_containers, router as endpoints_router
 
 
 async def shutdown_if_idle_for_too_long():
     """WARNING: Errors/stdout from this function are completely hidden!"""
 
     # this is in a for loop so the wait time can be extended while waiting
-    for _ in range(CURRENT_TIME_UNTIL_SHOTDOWN):
+    for _ in range(SELF["current_time_until_shutdown"]):
         await asyncio.sleep(1)
 
     if not IN_DEV:
@@ -131,7 +138,27 @@ async def shutdown_if_idle_for_too_long():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    asyncio.create_task(shutdown_if_idle_for_too_long())
+
+    try:
+        # boot containers before accepting any requests.
+        logger = Logger()
+        logger.log(f"Starting workers ...")
+        containers = [Container(**c) for c in json.loads(os.environ["CONTAINERS"])]
+        await run_in_threadpool(reboot_containers, new_container_config=containers, logger=logger)
+        logger.log(f"Started {len(SELF['workers'])} workers.")
+
+        if INACTIVITY_SHUTDOWN_TIME_SEC:
+            SELF["current_time_until_shutdown"] = int(INACTIVITY_SHUTDOWN_TIME_SEC)
+            asyncio.create_task(shutdown_if_idle_for_too_long())
+            logger.log(f"Set to shutdown if idle for {INACTIVITY_SHUTDOWN_TIME_SEC} sec.")
+
+    except Exception as e:
+        SELF["FAILED"] = True
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        traceback_str = format_traceback(tb_details)
+        logger.log(str(e), "ERROR", traceback=traceback_str)
+
     yield
 
 
@@ -145,8 +172,6 @@ def get_status():
         return {"status": "FAILED"}
     elif SELF["BOOTING"]:
         return {"status": "BOOTING"}
-    elif SELF["PLEASE_REBOOT"]:
-        return {"status": "PLEASE_REBOOT"}
     elif SELF["RUNNING"]:
         return {"status": "RUNNING"}
     else:
@@ -181,6 +206,20 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         traceback_str = format_traceback(tb_details)
         add_background_task(logger.log, str(e), "ERROR", traceback=traceback_str)
 
+    if response.status_code != 200 and hasattr(response, "body"):
+        response_text = response.body.decode("utf-8", errors="ignore")
+        logger.log(f"non-200 status response: {response.status_code}: {response_text}", "WARNING")
+    elif response.status_code != 200 and hasattr(response, "body_iterator"):
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        response_text = body.decode("utf-8", errors="ignore")
+        logger.log(f"non-200 status response: {response.status_code}: {response_text}", "WARNING")
+
+        # repair original response before returning (we read/emptied it's body_iterator)
+        async def body_stream():
+            yield body
+
+        response.body_iterator = body_stream()
+
     response_contains_background_tasks = getattr(response, "background") is not None
     if not response_contains_background_tasks:
         response.background = BackgroundTasks()
@@ -195,6 +234,6 @@ async def log_and_time_requests__log_errors(request: Request, call_next):
         msg = f"{request.method} to {request.url} returned {status} after {latency} seconds."
         add_background_task(logger.log, msg, latency=latency)
 
-    global CURRENT_TIME_UNTIL_SHOTDOWN
-    CURRENT_TIME_UNTIL_SHOTDOWN = INACTIVITY_SHUTDOWN_TIME_SEC
+    if INACTIVITY_SHUTDOWN_TIME_SEC:
+        SELF["current_time_until_shutdown"] = int(INACTIVITY_SHUTDOWN_TIME_SEC)
     return response

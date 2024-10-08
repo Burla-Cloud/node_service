@@ -5,10 +5,10 @@ import requests
 import traceback
 from uuid import uuid4
 from time import sleep
-from typing import Optional
 
-from google.cloud import logging
 import docker
+from docker import DockerClient
+from google.cloud import logging
 
 from node_service import PROJECT_ID, IN_DEV
 from node_service.helpers import next_free_port
@@ -26,10 +26,16 @@ DEVELOPMENT_VOLUMES = {
 }
 
 
-class SubJobExecutor:
+class Worker:
     """An instance of this = a running container with a running `container_service` instance."""
 
-    def __init__(self, python_version: str, python_executable: str, image: str, docker_client):
+    def __init__(
+        self,
+        python_version: str,
+        python_executable: str,
+        image: str,
+        docker_client: DockerClient,
+    ):
         self.container = None
         attempt = 0
         docker_client.images.pull(image)
@@ -96,18 +102,16 @@ class SubJobExecutor:
                             "name": self.container.name,
                         }
                     )
-
             attempt += 1
             if attempt == 10:
                 raise Exception("Unable to start container.")
 
-        self.subjob_id = None
         self.docker_client = docker_client
         self.python_version = python_version
         self.host = f"http://127.0.0.1:{port}"
 
         if self.status() != "READY":
-            raise Exception("Executor failed to start.")
+            raise Exception("Worker failed to start.")
 
     def exists(self):
         try:
@@ -119,7 +123,7 @@ class SubJobExecutor:
     def logs(self):
         if self.exists():
             return self.container.logs().decode("utf-8")
-        raise Exception("This executor no longer exists.")
+        raise Exception("This worker no longer exists.")
 
     def remove(self):
         if self.exists():
@@ -128,18 +132,6 @@ class SubJobExecutor:
             except docker.errors.APIError as e:
                 if not "409 Client Error" in str(e):
                     raise e
-
-    def execute(self, job_id: str, function_pkl: Optional[bytes] = None):
-        container_is_running = self.exists()
-        url = f"{self.host}/jobs/{job_id}"
-
-        if container_is_running and function_pkl:
-            response = requests.post(url, files=dict(function_pkl=function_pkl))
-        elif container_is_running:
-            response = requests.post(url)
-        else:
-            raise Exception("This executor no longer exists.")
-        response.raise_for_status()
 
     def log_debug_info(self):
         container_logs = self.logs() if self.exists() else "Unable to retrieve container logs."
