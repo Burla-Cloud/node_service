@@ -7,6 +7,7 @@ from typing import Optional
 from datetime import datetime, timedelta, timezone
 
 from collections import deque
+import docker
 from docker import DockerClient
 from docker.errors import APIError, NotFound
 
@@ -18,6 +19,10 @@ PRIVATE_PORT_QUEUE = deque(range(32768, 60999))  # <- these ports should be most
 
 
 def list_all_local_containers(docker_client: DockerClient):
+
+    # switch from api client to higher level client
+    docker_client = docker.DockerClient(client=docker_client)
+
     # for some reason `docker_client.containers.list(all=True)` likes to frequently not work
     for attempt in range(10):
         try:

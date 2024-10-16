@@ -7,10 +7,9 @@ from uuid import uuid4
 from time import sleep
 
 import docker
-from docker import DockerClient
 from google.cloud import logging
 
-from node_service import PROJECT_ID, IN_DEV
+from node_service import PROJECT_ID, IN_DEV, ACCESS_TOKEN
 from node_service.helpers import next_free_port
 
 LOGGER = logging.Client().logger("node_service")
@@ -34,11 +33,16 @@ class Worker:
         python_version: str,
         python_executable: str,
         image: str,
-        docker_client: DockerClient,
+        docker_client: docker.APIClient,
     ):
         self.container = None
         attempt = 0
-        docker_client.images.pull(image)
+        auth_config = {"username": "oauth2accesstoken", "password": ACCESS_TOKEN}
+        # this fails using the higher level client for some reason
+        docker_client.pull(image, auth_config=auth_config)
+
+        # switch from api client to higher level client
+        docker_client = docker.DockerClient(client=docker_client)
 
         while self.container is None:
             port = next_free_port()
