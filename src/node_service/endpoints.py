@@ -189,8 +189,7 @@ def reboot_containers(
         if new_container_config:
             SELF["current_container_config"] = new_container_config
 
-        # docker_client = docker.from_env(timeout=240)
-        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
+        docker_client = docker.DockerClient(base_url="unix://var/run/docker.sock")
         node_doc = firestore.Client(project=PROJECT_ID).collection("nodes").document(INSTANCE_NAME)
         node_doc.update(
             {
