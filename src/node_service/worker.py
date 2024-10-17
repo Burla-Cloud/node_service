@@ -42,24 +42,32 @@ class Worker:
         auth_config = {"username": "oauth2accesstoken", "password": ACCESS_TOKEN}
         docker_client.pull(image, auth_config=auth_config)
 
+        images = docker_client.images()
+        print("Available images:", [img["RepoTags"] for img in images])
+
+        try:
+            docker_client.inspect_image(image)
+        except docker.errors.ImageNotFound:
+            raise Exception(f"Image {image} not found after pulling")
+
         while self.container is None:
             port = next_free_port()
             gunicorn_command = f"gunicorn -t 60 -b 0.0.0.0:{port} container_service:app"
             short_image_name = image.split("/")[-1].split(":")[0]
             try:
                 container = docker_client.create_container(
-                    name=f"{short_image_name}_{str(uuid4())[:8]}",
                     image=image,
                     command=["/bin/sh", "-c", f"{python_executable} -m {gunicorn_command}"],
+                    name=f"{short_image_name}_{str(uuid4())[:8]}",
                     ports=[port],
-                    host_config=docker_client.create_host_config(
-                        port_bindings={port: port}, binds=DEVELOPMENT_VOLUMES if IN_DEV else None
-                    ),
+                    volumes=DEVELOPMENT_VOLUMES if IN_DEV else None,
+                    host_config=docker_client.create_host_config(port_bindings={port: port}),
                     environment={
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                         "PROJECT_ID": PROJECT_ID,
                         "IN_DEV": IN_DEV,
                     },
+                    detach=True,
                 )
                 docker_client.start(container=container.get("Id"))
                 self.container = container
