@@ -42,13 +42,13 @@ class Worker:
         auth_config = {"username": "oauth2accesstoken", "password": ACCESS_TOKEN}
         docker_client.pull(image, auth_config=auth_config)
 
-        images = docker_client.images()
-        print("Available images:", [img["RepoTags"] for img in images])
-
+        # ODDLY, if `docker_client.pull` fails to pull the image, it will NOT throw an error...
+        # check here that the image was actually pulled and exists on disk,
         try:
             docker_client.inspect_image(image)
         except docker.errors.ImageNotFound:
-            raise Exception(f"Image {image} not found after pulling")
+            msg = f"Image {image} not found after pulling!\nDid vm run out of disk space?"
+            raise Exception(msg)
 
         while self.container is None:
             port = next_free_port()
