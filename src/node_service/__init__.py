@@ -115,11 +115,13 @@ async def shutdown_if_idle_for_too_long():
     """WARNING: Errors/stdout from this function are completely hidden!"""
 
     # this is in a for loop so the wait time can be extended while waiting
-    for _ in range(SELF["current_time_until_shutdown"]):
+    while SELF["current_time_until_shutdown"] > 1:
         await asyncio.sleep(1)
 
     if not IN_DEV:
-        struct = dict(message=f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}")
+        msg = f'time remaining: {SELF["current_time_until_shutdown"]}'
+        msg += f"SHUTTING DOWN NODE DUE TO INACTIVITY: {INSTANCE_NAME}"
+        struct = dict(message=msg)
         GCL_CLIENT.log_struct(struct, severity="WARNING")
 
         instance_client = InstancesClient()

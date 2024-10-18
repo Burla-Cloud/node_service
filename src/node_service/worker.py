@@ -7,10 +7,9 @@ from uuid import uuid4
 from time import sleep
 
 import docker
-from docker import DockerClient
 from google.cloud import logging
 
-from node_service import PROJECT_ID, IN_DEV
+from node_service import PROJECT_ID, IN_DEV, ACCESS_TOKEN
 from node_service.helpers import next_free_port
 
 LOGGER = logging.Client().logger("node_service")
@@ -34,23 +33,35 @@ class Worker:
         python_version: str,
         python_executable: str,
         image: str,
-        docker_client: DockerClient,
+        docker_client: docker.APIClient,
     ):
         self.container = None
         attempt = 0
-        docker_client.images.pull(image)
+
+        # Use the provided APIClient directly
+        auth_config = {"username": "oauth2accesstoken", "password": ACCESS_TOKEN}
+        docker_client.pull(image, auth_config=auth_config)
+
+        # ODDLY, if `docker_client.pull` fails to pull the image, it will NOT throw an error...
+        # check here that the image was actually pulled and exists on disk,
+        try:
+            docker_client.inspect_image(image)
+        except docker.errors.ImageNotFound:
+            msg = f"Image {image} not found after pulling!\nDid vm run out of disk space?"
+            raise Exception(msg)
 
         while self.container is None:
             port = next_free_port()
             gunicorn_command = f"gunicorn -t 60 -b 0.0.0.0:{port} container_service:app"
             short_image_name = image.split("/")[-1].split(":")[0]
             try:
-                self.container = docker_client.containers.run(
-                    name=f"{short_image_name}_{str(uuid4())[:8]}",
+                container = docker_client.create_container(
                     image=image,
                     command=["/bin/sh", "-c", f"{python_executable} -m {gunicorn_command}"],
-                    ports={port: port},
-                    volumes=DEVELOPMENT_VOLUMES if IN_DEV else {},
+                    name=f"{short_image_name}_{str(uuid4())[:8]}",
+                    ports=[port],
+                    volumes=DEVELOPMENT_VOLUMES if IN_DEV else None,
+                    host_config=docker_client.create_host_config(port_bindings={port: port}),
                     environment={
                         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
                         "PROJECT_ID": PROJECT_ID,
@@ -58,10 +69,12 @@ class Worker:
                     },
                     detach=True,
                 )
+                docker_client.start(container=container.get("Id"))
+                self.container = container
             except docker.errors.APIError as e:
                 if ("address already in use" in str(e)) or ("port is already allocated" in str(e)):
                     # This leaves an extra container in the "Created" state.
-                    containers_status = [c.status for c in docker_client.containers.list(all=True)]
+                    containers_status = [c["State"] for c in docker_client.containers(all=True)]
                     LOGGER.log_struct(
                         {
                             "severity": "WARNING",
@@ -77,29 +90,29 @@ class Worker:
                 traceback_str = "".join(traceback_details)
                 msg = "error thrown on `docker run` after returning."
                 log = {"message": msg, "exception": str(e), "traceback": traceback_str}
-                LOGGER.log_struct(dict(severity="WARNING").update(log))
+                LOGGER.log_struct(dict(severity="WARNING", **log))
                 pass  # Thrown by containers.run long after it has already returned ??
             else:
                 # Sometimes the container doesn't start and also doesn't throw an error ??
                 # This is the case when calling containers.run() and container.start()
                 attempt = 0
                 sleep(1)
-                self.container.reload()
-                while self.container.status == "created":
-                    self.container.start()
+                container_info = docker_client.inspect_container(self.container.get("Id"))
+                while container_info["State"]["Status"] == "created":
+                    docker_client.start(container=self.container.get("Id"))
                     attempt += 1
                     if attempt == 10:
                         raise Exception("Unable to start node.")
                     sleep(1)
-                    self.container.reload()
+                    container_info = docker_client.inspect_container(self.container.get("Id"))
 
                 if attempt > 1:
                     LOGGER.log_struct(
                         {
                             "severity": "INFO",
                             "message": f"CONTAINER STARTED! after {attempt+1} attempt(s)",
-                            "state": self.container.status,
-                            "name": self.container.name,
+                            "state": container_info["State"]["Status"],
+                            "name": container_info["Name"],
                         }
                     )
             attempt += 1
@@ -115,20 +128,22 @@ class Worker:
 
     def exists(self):
         try:
-            self.container.reload()
+            self.docker_client.inspect_container(self.container.get("Id"))
             return True
         except docker.errors.NotFound:
             return False
 
     def logs(self):
         if self.exists():
-            return self.container.logs().decode("utf-8")
+            return self.docker_client.logs(self.container.get("Id")).decode("utf-8")
         raise Exception("This worker no longer exists.")
 
     def remove(self):
         if self.exists():
             try:
-                self.container.remove(force=True)  # The "force" arg kills it if it's not stopped
+                self.docker_client.remove_container(
+                    self.container.get("Id"), force=True
+                )  # The "force" arg kills it if it's not stopped
             except docker.errors.APIError as e:
                 if not "409 Client Error" in str(e):
                     raise e
@@ -136,7 +151,7 @@ class Worker:
     def log_debug_info(self):
         container_logs = self.logs() if self.exists() else "Unable to retrieve container logs."
         container_logs = f"\nERROR INSIDE CONTAINER:\n{container_logs}\n"
-        containers_info = [vars(c) for c in self.docker_client.containers.list(all=True)]
+        containers_info = self.docker_client.containers(all=True)
         containers_info = json.loads(json.dumps(containers_info, default=lambda thing: str(thing)))
         logger = logging.Client().logger("node_service")
         logger.log_struct(

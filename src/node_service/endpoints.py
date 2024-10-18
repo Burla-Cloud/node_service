@@ -25,7 +25,7 @@ from node_service import (
     get_add_background_task_function,
     Container,
 )
-from node_service.helpers import Logger, format_traceback, list_all_local_containers
+from node_service.helpers import Logger, format_traceback
 from node_service.worker import Worker
 from node_service import ACCESS_TOKEN
 
@@ -147,8 +147,6 @@ def execute(
 
     assigned_starting_indicies = asyncio.run(assign_workers(workers_to_keep))
 
-    print(f"Assigned starting indicies: {assigned_starting_indicies}")
-
     if not len(assigned_starting_indicies) == len(workers_to_keep):
         desired_starting_indicies = list(range(starting_index, len(workers_to_keep)))
         unassigned_indicies = set(desired_starting_indicies) - set(assigned_starting_indicies)
@@ -189,7 +187,7 @@ def reboot_containers(
         if new_container_config:
             SELF["current_container_config"] = new_container_config
 
-        docker_client = docker.from_env(timeout=240)
+        docker_client = docker.APIClient(base_url="unix://var/run/docker.sock")
         node_doc = firestore.Client(project=PROJECT_ID).collection("nodes").document(INSTANCE_NAME)
         node_doc.update(
             {
@@ -202,13 +200,14 @@ def reboot_containers(
         )
 
         # remove all containers (except those named `main_service`)
-        for container in list_all_local_containers(docker_client):
-            try:
-                container.remove(force=True)
-            except (APIError, NotFound, requests.exceptions.HTTPError) as e:
-                # re-raise any errors that aren't an "already-in-progress" error
-                if not (("409" in str(e)) or ("404" in str(e))):
-                    raise e
+        for container in docker_client.containers():
+            if container["Names"][0] != "/main_service":
+                try:
+                    docker_client.remove_container(container["Id"], force=True)
+                except (APIError, NotFound, requests.exceptions.HTTPError) as e:
+                    # re-raise any errors that aren't an "already-in-progress" error
+                    if not (("409" in str(e)) or ("404" in str(e))):
+                        raise e
 
         def create_worker(*a, **kw):
             # Log error inside thread because sometimes it isn't sent to the main thread, idk why.
@@ -241,7 +240,8 @@ def reboot_containers(
 
         # Sometimes on larger machines, some containers don't start, or get stuck in "CREATED" state
         # This has not been diagnosed, this check is performed to ensure all containers started.
-        containers_status = [c.status for c in list_all_local_containers(docker_client)]
+        containers = [c for c in docker_client.containers() if c["Names"][0] != "/main_service"]
+        containers_status = [c["State"] for c in containers]
         num_running_containers = sum([status == "running" for status in containers_status])
         expected_n_containers = len(SELF["current_container_config"]) * INSTANCE_N_CPUS
         some_containers_missing = num_running_containers != expected_n_containers
